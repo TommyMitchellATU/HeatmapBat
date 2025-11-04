@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.uv/
+dist/
+.build/
+
+# Node
+node_modules/
+
+# VS Code
+.vscode/
+
+# OS + misc
+.DS_Store
+
+# Docker volumes
+data/
+.tmp/
