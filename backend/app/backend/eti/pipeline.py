@@ -1,5 +1,6 @@
 from pathlib import Path
 
+
 def run_etl(input_dir: Path, output_dir: Path) -> None:
     """
     Placeholder ETL entrypoint.

@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+# Treat common binaries as binary to avoid line-ending filters
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.svg binary
+*.ico binary
+*.pdf binary
+*.parquet binary
+*.zip binary
+*.gz binary

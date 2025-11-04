@@ -11,22 +11,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s -- -y
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s --
 ENV PATH="/root/.local/bin:${PATH}"
 
 WORKDIR /app
 
 # Copy project metadata first (for layer caching)
 COPY pyproject.toml ./
-# If you create a uv.lock later, copy it too:
-# COPY uv.lock ./
+# Intentionally not copying uv.lock to avoid Python version mismatches during resolution
 
 # Install deps
-RUN uv sync --no-install-project || true
+RUN uv sync --dev --no-install-project || true
 
 # Copy source
 COPY app ./app
-COPY etl ./etl
-COPY tests ./tests
 
 EXPOSE 8000
