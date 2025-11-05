@@ -56,7 +56,7 @@ client = TestClient(app)
 
 ## Gotchas / current state
 - `backend/pyproject.toml` is empty and `backend/uv.lock` is minimal; ensure deps (e.g., `fastapi`, `uvicorn`, `httpx`, `pytest`, `ruff`, `mypy`) are defined when adding features. Keep Python version in lock consistent with Dockerfile (3.11).
-- ETL packages use `_init_.py` instead of `__init__.py` under `backend/app/backend/eti/**`, and a duplicated path exists at `backend/app/backend/eti/backend/eti/load/`. These folders are placeholders and not importable as-is.
+- ETL packages previously used `_init_.py` instead of `__init__.py`; this has been corrected. The odd nested `backend/app/backend/eti/backend/eti/load/` path has been flattened to `backend/app/backend/eti/load/`.
 - `backend/Dockerfile` copies `etl/` and `tests/` at the repo layer, but the actual scaffolds live under `backend/app/backend/...`. Runtime uses a bind mount (`./backend:/app`), so local edits still reflect, but be mindful when building images without the bind.
 - README mentions `pre-commit` but no `.pre-commit-config.yaml` is present.
 
