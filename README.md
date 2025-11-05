@@ -112,7 +112,9 @@ flow:
 - Windows CRLF line endings
 	- The repo uses `.gitattributes` to enforce LF. If hooks fix line endings during commit, re-run: `git add -A` then `git commit -m ...`.
 
-## Rational
+```
+
+## Explenation of each part
 
 HeatmapBat aims to process geospatial time-series at scale and serve aggregated insights. The current structure sets us up for reliability and speed:
 
