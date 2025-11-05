@@ -86,7 +86,7 @@ How it works:
 - `./backend` is bind-mounted to `/app` in the container for hot reload while you edit code locally
 - Environment variables for DB/Redis/S3 are injected by compose
 
-## Tests & lint
+## Tests
 ```bash
 # Run the test suite inside the API container
 docker compose exec api uv run pytest -q
