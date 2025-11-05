@@ -1,8 +1,4 @@
-# HeatmapBat backend (FastAPI + ETL)
-
-This folder contains the backend service for HeatmapBat. It's Dockerized for local development and includes a FastAPI app plus a placeholder ETL scaffold.
-
-## Project overview (what each part does)
+## Project overview
 
 - Root `docker-compose.yml` (repo root): Orchestrates the local stack:
 	- `db` (Postgres + PostGIS) with init script `db/init.sql` enabling the PostGIS extension
@@ -38,7 +34,40 @@ backend/
 				test_health.py        # sample pytest hitting /health
 ```
 
-## Run locally (Docker)
+## Project structure
+
+- docker-compose.yml (repo root)
+	- One file that starts everything for local dev. It runs 4 containers:
+		- db = Postgres with PostGIS (spatial database)
+		- redis = in‑memory cache/queue
+		- minio = S3-compatible file storage (with a web console)
+		- api = this Python FastAPI app, with auto‑reload for quick iteration
+
+- backend/
+	- Dockerfile: recipe to build the api container (Python 3.11 + uv package manager)
+	- pyproject.toml: where Python dependencies (fastapi, uvicorn, etc.) and tools (pytest, ruff, mypy) are declared
+	- app/ (Python package named "app")
+		- main.py: the minimal web server. It exposes /health and /live for checks.
+		- backend/eti/: ETL scaffold (read/clean/write data). It’s a separate package so data jobs don’t mix with the web app.
+			- extract/: functions that read raw inputs (CSV/TXT/metadata)
+			- transform/: pure data transformations (timestamps, geotagging, features)
+			- load/: writers to Parquet, PostGIS, and S3
+			- pipeline.py: a single function (run_etl) that coordinates extract→transform→load
+		- backend/tests/: example tests that call the API in‑process
+	- .github/workflows/ci.yml: CI pipeline that installs deps, lints, type‑checks, and runs tests
+
+- db/init.sql
+	- Enables PostGIS in the local database so you can store/query geometry types used in heatmaps.
+
+- .env
+	- Environment variables loaded by docker compose (for example, credentials or overrides). If missing, defaults are used from compose.
+
+- .pre-commit-config.yaml
+	- Git hooks that run on commit to keep diffs clean (line endings), code formatted, and basic issues caught early.
+
+- .gitattributes
+	- Ensures consistent LF line endings across OSes (prevents CRLF/LF flip‑flop on Windows).
+
 ```bash
 # Build images and start services in the background
 docker compose up -d --build
@@ -55,7 +84,7 @@ docker compose exec db psql -U app -d app -c "SELECT PostGIS_Full_Version();"
 How it works:
 - The API container runs `uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000`
 - `./backend` is bind-mounted to `/app` in the container for hot reload while you edit code locally
-- Environment variables for DB/Redis/S3 are injected by compose so you can wire integrations later
+- Environment variables for DB/Redis/S3 are injected by compose
 
 ## Tests & lint
 ```bash
@@ -64,21 +93,9 @@ docker compose exec api uv run pytest -q
 
 # Run pre-commit hooks locally (format, lint, basic checks)
 pre-commit run --all-files
-```
 
-What these do:
-- `pytest` uses `fastapi.testclient` to hit routes (see `backend/app/backend/tests/test_health.py`)
-- `pre-commit` runs code hygiene (line endings, trailing whitespace) and ruff (lint/format)
-	- Type checks (mypy) run in CI by default; the pre-commit hook may be enabled once package layout stabilizes
 
-## ETL (placeholder)
-```bash
-# Placeholder example (not wired up yet); folders are scaffolds only
-# Import via the app package path (now importable)
-docker compose exec api uv run python -c "from app.backend.eti.pipeline import run_etl; import pathlib; run_etl(pathlib.Path('/data/in'), pathlib.Path('/data/out'))"
-```
-
-Intended flow (future):
+flow:
 - Extract raw files/metadata, transform/enrich (timestamps, geotagging, features)
 - Load partitioned Parquet to S3 (MinIO) and geometries/aggregates to PostGIS
 - Optionally queue jobs/status via Redis
@@ -95,22 +112,71 @@ Intended flow (future):
 - Windows CRLF line endings
 	- The repo uses `.gitattributes` to enforce LF. If hooks fix line endings during commit, re-run: `git add -A` then `git commit -m ...`.
 
-## Why this robustness?
+## Rational
 
 HeatmapBat aims to process geospatial time-series at scale and serve aggregated insights. The current structure sets us up for reliability and speed:
 
-- Reproducible environments
-	- Docker Compose brings PostGIS, Redis, and S3-compatible storage locally, so integration points are exercised early.
-	- Python version is pinned (3.11) across Docker and CI to avoid “works on my machine”.
-- Strong developer feedback loops
-	- Hot reload via `fastapi dev` keeps iteration tight.
-	- Pre-commit hooks (EOLs, lint/format) prevent noisy diffs and cross-OS issues.
-	- CI runs ruff, mypy, and pytest to gate regressions.
-- Clear separation of concerns
-	- API stays small and responsive; ETL stages (extract/transform/load) live in their own package with clean contracts.
-	- Side effects (DB/S3) are funneled through loaders, making it easy to swap destinations (local/S3) or batch/stream mechanics later.
-- Future-ready for scale
-	- PostGIS supports spatial indices/queries for heatmaps; Redis can handle caching/queues; MinIO stands in for S3 in dev but maps to cloud in prod.
-	- The ETL pipeline can be scheduled (cron/Prefect) without entangling the web API.
+### docker-compose.yml (root)
 
-In short, this scaffolding avoids rework when data volumes and features grow, while remaining simple enough for fast local development today.
+- A single file that starts four containers that work together: the web API, a database (Postgres+PostGIS), a cache/queue (Redis), and file storage (MinIO). This runs the same setup with one command, without installing databases or services.
+
+### backend/Dockerfile
+
+Settings to build the API container (based on Python 3.11) and install Python dependencies with uv. This guarantees the API runs with the same Python and libraries everywhere (dev/CI/prod).
+Testing: `docker compose build api` then start the stack; the API should report healthy at `/health`.
+
+### backend/pyproject.toml
+
+The list of Python packages (FastAPI, Uvicorn, etc.) and tool configs (ruff, mypy, pytest).
+Start the `api` service; it runs `uv sync` to install what's in this file. Lint/type-check/test commands in CI read their settings from here.
+
+### backend/app/main.py (API)
+
+Turns Python functions into URLs you can call. Currently just for health checks but will add functionality later.
+ `curl http://localhost:8000/health` should return JSON with `ok: true`.
+
+### backend/app/backend/eti/** (ETL scaffold)
+
+Read raw inputs, transform, and write outputs (to S3/DB/etc.). Seperates processing from the fast web API.
+`backend/app/backend/eti/` with `extract/`, `transform/`, `load/`, and `pipeline.py`.
+
+### backend/app/backend/tests/** (tests)
+
+Automated checks to prove the app behaves as expected.
+
+### db/init.sql (database setup)
+
+A SQL script that enables the PostGIS extension in the local Postgres database. We need geospatial types and functions for heatmaps.
+
+### .env (environment overrides)
+
+A local file where you can override environment variables that compose passes to services. Lets you change credentials/URLs/feature flags without editing the compose file.
+
+### .pre-commit-config.yaml (git hooks)
+
+Rules that run on `git commit` to auto-fix line endings, format/lint code, and reports mistakes (this is literal magic).
+
+### .gitattributes (line endings)
+
+A Git setting file that forces LF line endings in the repo regardless of OS defaults.
+Git diffs shouldn't show random EOL-only changes when switching branches or collaborating.
+
+### .github/workflows/ci.yml (CI pipeline)
+
+Runs in GitHub on every push/PR: installs deps, lints, type-checks, and runs tests.
+
+## Glossary
+
+- FastAPI: A Python web framework for building APIs quickly.  (web server that turns Python functions into HTTP endpoints)
+- Uvicorn: A fast web server (ASGI) that runs the FastAPI app.
+- Pydantic: Validates and serializes data for API.
+- PostGIS: Spatial extension for Postgres that adds geometry types and geospatial functions (heatmaps, distance, etc.).
+- Redis: In‑memory key/value store used for caching and simple queues.
+- MinIO: Local, S3‑compatible object storage. Great for dev; maps to AWS S3 in production.
+- S3 (object storage): Stores files/blobs (like Parquet outputs) rather than rows in a database.
+- ETL: Extract → Transform → Load. Read raw inputs, clean, and write outputs to storage/DB.
+- Docker Compose: One YAML file that starts multiple containers together for local dev.
+- uv: A fast Python package manager/runner used here instead of pip for speed and consistency.
+- pytest: Test runner for Python. Runs your tests and reports results.
+- ruff: Fast linter/formatter for Python code style and simple issues.
+- mypy: Type checker that finds mistakes by validating function signatures and variable types.
