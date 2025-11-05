@@ -1,4 +1,5 @@
 repos:
+  # Code hygiene hooks to keep diffs small and avoid cross-OS issues
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
@@ -8,6 +9,7 @@ repos:
       - id: mixed-line-ending
         args: ["--fix=lf"]
 
+  # Linting/formatting via Ruff (fast and consistent with CI)
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.9
     hooks:
@@ -18,6 +20,7 @@ repos:
         name: ruff (format)
         args: ["--config", "backend/pyproject.toml", "backend"]
 
+  # Type-checking with mypy using the repo's pyproject settings
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.11.2
     hooks:

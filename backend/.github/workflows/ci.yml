@@ -14,17 +14,22 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+      # Use CPython 3.11 to match Dockerfile and tool configs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Install uv
+        # uv is the package manager used across dev, CI, and containers
         run: pip install uv
       - name: Sync deps
+        # Install project + dev dependencies declared in pyproject.toml
         run: uv sync --dev
       - name: Lint & format
+        # Static analysis and formatting (fails the build on issues)
         run: |
           uv run ruff check .
           uv run ruff format --check
           uv run mypy .
       - name: Test
+        # Run pytest quietly; artifacts/logs can be added later as needed
         run: uv run pytest -q

@@ -94,3 +94,23 @@ Intended flow (future):
 	- Dockerfile uses Python 3.11. If you add a lockfile later, regenerate it under 3.11 to match the image.
 - Windows CRLF line endings
 	- The repo uses `.gitattributes` to enforce LF. If hooks fix line endings during commit, re-run: `git add -A` then `git commit -m ...`.
+
+## Why this robustness?
+
+HeatmapBat aims to process geospatial time-series at scale and serve aggregated insights. The current structure sets us up for reliability and speed:
+
+- Reproducible environments
+	- Docker Compose brings PostGIS, Redis, and S3-compatible storage locally, so integration points are exercised early.
+	- Python version is pinned (3.11) across Docker and CI to avoid “works on my machine”.
+- Strong developer feedback loops
+	- Hot reload via `fastapi dev` keeps iteration tight.
+	- Pre-commit hooks (EOLs, lint/format) prevent noisy diffs and cross-OS issues.
+	- CI runs ruff, mypy, and pytest to gate regressions.
+- Clear separation of concerns
+	- API stays small and responsive; ETL stages (extract/transform/load) live in their own package with clean contracts.
+	- Side effects (DB/S3) are funneled through loaders, making it easy to swap destinations (local/S3) or batch/stream mechanics later.
+- Future-ready for scale
+	- PostGIS supports spatial indices/queries for heatmaps; Redis can handle caching/queues; MinIO stands in for S3 in dev but maps to cloud in prod.
+	- The ETL pipeline can be scheduled (cron/Prefect) without entangling the web API.
+
+In short, this scaffolding avoids rework when data volumes and features grow, while remaining simple enough for fast local development today.

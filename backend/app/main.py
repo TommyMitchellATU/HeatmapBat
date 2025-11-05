@@ -1,3 +1,13 @@
+"""FastAPI application entrypoint for HeatmapBat.
+
+Exposes lightweight operations endpoints used by infra and health probes:
+- GET /health -> quick readiness/health check used by compose/CI and humans
+- GET /live   -> liveness signal (same as health for now)
+
+- Keeps the app minimal while the ETL and data models evolve.
+- Demonstrates the project’s testing pattern and response modelling (Pydantic v2).
+"""
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 
