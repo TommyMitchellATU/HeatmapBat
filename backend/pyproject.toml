@@ -25,6 +25,16 @@ dev = [
   "types-requests",
 ]
 
+[tool.uv]
+# These get installed by: uv sync --dev
+dev-dependencies = [
+  "pytest",
+  "ruff",
+  "mypy",
+  "types-redis",
+  "types-requests",
+]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100
