@@ -2,6 +2,7 @@
 # Why this test exists:
 # - Exercises FastAPI in-process using `fastapi.testclient`.
 # - Acts as a template for future route tests (happy path + status/assertions).
+
 from fastapi.testclient import TestClient
 
 from app.main import app

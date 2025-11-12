@@ -25,16 +25,6 @@ dev = [
   "types-requests",
 ]
 
-# Install dev tools in CI with `uv sync --dev`
-[tool.uv.dependency-groups]
-dev = [
-  "pytest",
-  "ruff",
-  "mypy",
-  "types-redis",
-  "types-requests",
-]
-
 [tool.ruff]
 target-version = "py311"
 line-length = 100

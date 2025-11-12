@@ -37,8 +37,8 @@ jobs:
           restore-keys: |
             venv-${{ runner.os }}-
 
-      - name: Sync deps (project + dev)
-        run: uv sync --dev
+      - name: Sync deps (project + dev extras)
+        run: uv sync --extra dev
 
       - name: Ruff (lint)
         run: uv run ruff check .
