@@ -10,3 +10,5 @@ Why needed:
 
 Makes `app` importable
 """
+
+# Marks "app" as a package so tests can `from app.main import app`
