@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      # Use CPython 3.11 to match Dockerfile and tool configs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        # uv is the package manager used across dev, CI, and containers
+        run: pip install uv
+      - name: Sync deps
+        # Install project + dev dependencies declared in pyproject.toml
+        run: uv sync --dev
+      - name: Lint & format
+        # Static analysis and formatting (fails the build on issues)
+        run: |
+          uv run ruff check .
+          uv run ruff format --check
+          uv run mypy .
+      - name: Test
+        # Run pytest quietly; artifacts/logs can be added later as needed
+        run: uv run pytest -q
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Ensure docker compose plugin
+        run: |
+          if ! docker compose version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y docker-compose-plugin
+          fi
+
+      - name: Start services with docker compose
+        run: docker compose up -d --build
+
+      - name: Wait for API readiness
+        run: |
+          echo "Waiting for http://localhost:8000/health ..."
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8000/health >/dev/null; then
+              echo "API is healthy"
+              exit 0
+            fi
+            echo "Waiting... ($i)"
+            sleep 5
+          done
+          echo "API did not become healthy in time"
+          docker compose logs api
+          exit 1
+
+      - name: Run tests inside api container
+        run: docker compose exec -T api uv run pytest -q
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down compose stack
+        if: always()
+        run: docker compose down -v
