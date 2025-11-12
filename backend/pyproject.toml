@@ -12,11 +12,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = []  # keep empty; using dependency-groups instead
+dev = []  # keep empty; CI uses [tool.uv].dev-dependencies
 
-# Remove deprecated [tool.uv] dev-dependencies, replace with dependency-groups:
-[tool.uv.dependency-groups]
-dev = [
+[tool.uv]
+dev-dependencies = [
     "pytest>=8.2",
     "httpx>=0.27.0",
     "mypy>=1.10",

@@ -8,7 +8,7 @@ Why needed:
 - On Windows and with nested folders, explicit packages help avoid duplicate-module
         resolution issues and make imports unambiguous (e.g. `from app.main import app`).
 
-Makes `app` importable
+Makes "app" an importable package for tests.
 """
 
 # Marks "app" as a package so tests can `from app.main import app`
