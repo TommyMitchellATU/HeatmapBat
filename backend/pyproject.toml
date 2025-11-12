@@ -13,7 +13,7 @@ dependencies = [
   "pydantic",
   "psycopg[binary]",
   "redis",
-  "boto3",          # for S3-compatible (MinIO) if needed
+  "boto3",
 ]
 
 [project.optional-dependencies]
@@ -29,8 +29,8 @@ dev = [
 target-version = "py311"
 line-length = 100
 exclude = ["backend/app/backend/eti/__pycache__"]
-lint.select = ["E", "F", "I", "UP"]
-lint.ignore = ["E501"]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -43,6 +43,3 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["app/backend/tests"]
 pythonpath = ["app"]
-
-[tool.uv]
-dev-groups = ["dev"]
