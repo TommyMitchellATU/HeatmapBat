@@ -25,9 +25,9 @@ dev = [
   "types-requests",
 ]
 
-# Lets CI install dev tools with `uv sync --dev`
-[tool.uv]
-dev-dependencies = [
+# Install dev tools in CI with `uv sync --dev`
+[tool.uv.dependency-groups]
+dev = [
   "pytest",
   "ruff",
   "mypy",
