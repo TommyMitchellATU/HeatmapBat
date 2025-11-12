@@ -32,6 +32,8 @@ jobs:
         run: uv run mypy .
 
       - name: Pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend
         run: uv run pytest -q
 
   compose-integration:

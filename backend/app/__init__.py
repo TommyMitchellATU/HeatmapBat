@@ -11,4 +11,4 @@ Why needed:
 Makes "app" an importable package for tests.
 """
 
-# Marks "app" as a package so tests can `from app.main import app`
+# Marks "app" as a package for imports in tests.
