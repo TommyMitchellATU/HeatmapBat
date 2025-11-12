@@ -7,8 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Your Name", email = "you@example.com" }]
 dependencies = [
-  "fastapi",
-  "uvicorn[standard]",
+  "fastapi[standard]",  # needed for `fastapi dev` CLI
   "httpx",
   "pydantic",
   "psycopg[binary]",
