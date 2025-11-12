@@ -15,7 +15,7 @@ jobs:
     name: Lint / Type-check / Test
     runs-on: ubuntu-latest
     env:
-      PYTHONPATH: app
+      PYTHONPATH: ${{ github.workspace }}/backend
     defaults:
       run:
         working-directory: backend
