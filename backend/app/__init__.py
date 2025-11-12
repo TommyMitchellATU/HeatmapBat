@@ -7,4 +7,6 @@ Purpose:
 Why needed:
 - On Windows and with nested folders, explicit packages help avoid duplicate-module
         resolution issues and make imports unambiguous (e.g. `from app.main import app`).
+
+Makes `app` an importable package in CI
 """
