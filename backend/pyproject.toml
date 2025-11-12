@@ -61,3 +61,32 @@ exclude = 'backend/app/backend($|/)|backend/app/backend/eti/backend($|/)'
 explicit_package_bases = true
 # Point mypy to the backend folder so `-p app` resolves when run from repo root
 mypy_path = ["backend"]
+
+[project]
+name = "heatmapbat-backend"
+version = "0.1.0"
+description = "HeatmapBat FastAPI backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27.0",
+    "psycopg[binary]>=3.1.18",
+    "redis>=5.0.0",
+    "boto3>=1.34.0",
+    "pydantic>=2.7.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
