@@ -2,13 +2,14 @@
 # Why this test exists:
 # - Exercises FastAPI in-process using `fastapi.testclient`.
 # - Acts as a template for future route tests (happy path + status/assertions).
-from app.main import app
 from fastapi.testclient import TestClient
+
+from app.main import app
 
 client = TestClient(app)
 
 
-def test_health_ok():
+def test_health():
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}

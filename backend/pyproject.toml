@@ -25,8 +25,8 @@ dev = [
   "types-requests",
 ]
 
+# Lets CI install dev tools with `uv sync --dev`
 [tool.uv]
-# These get installed by: uv sync --dev
 dev-dependencies = [
   "pytest",
   "ruff",
@@ -38,7 +38,9 @@ dev-dependencies = [
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-exclude = ["backend/app/backend/eti/__pycache__"]
+exclude = ["app/backend/eti/__pycache__"]
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
 
