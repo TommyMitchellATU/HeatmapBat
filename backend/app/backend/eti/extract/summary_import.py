@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.backend.eti.models import MaugSummarySample
 
-"""Helpers for parsing MAUG ``*_Summary.txt`` files into ORM objects.
+
+""" Todo allow multiple diffrerent file formats
+
+Helpers for parsing MAUG ``*_Summary.txt`` files into ORM objects.
 
 The MAUG summary files are CSV‑like text files with columns such as DATE, TIME,
 LAT, LON, NS, EW, POWER(V), TEMP(C), and others. This module is responsible
