@@ -15,7 +15,9 @@ class MaugSummarySample(Base):
     __tablename__ = "maug_summary_samples"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    timestamp_utc: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    timestamp_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), nullable=False
+    )
 
     lat: Mapped[float] = mapped_column(Float, nullable=False)
     lon: Mapped[float] = mapped_column(Float, nullable=False)

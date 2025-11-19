@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 from app.backend.eti.models import MaugSummarySample
 
 
-def parse_lat_lon(lat_str: str, ns_str: str, lon_str: str, ew_str: str) -> tuple[float, float]:
+def parse_lat_lon(
+    lat_str: str, ns_str: str, lon_str: str, ew_str: str
+) -> tuple[float, float]:
     lat = float(lat_str.strip())
     if ns_str.strip().lower() == "s":
         lat = -lat
@@ -24,7 +26,9 @@ def parse_lat_lon(lat_str: str, ns_str: str, lon_str: str, ew_str: str) -> tuple
 
 def parse_timestamp(date_str: str, time_str: str) -> datetime:
     # Example: "2024-May-16" + "20:55:59"
-    return datetime.strptime(f"{date_str.strip()} {time_str.strip()}", "%Y-%b-%d %H:%M:%S")
+    return datetime.strptime(
+        f"{date_str.strip()} {time_str.strip()}", "%Y-%b-%d %H:%M:%S"
+    )
 
 
 def parse_summary_file(path: Path) -> List[MaugSummarySample]:
