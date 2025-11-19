@@ -9,9 +9,24 @@ from sqlalchemy.orm import Session
 
 from app.backend.eti.models import MaugSummarySample
 
+"""Helpers for parsing MAUG ``*_Summary.txt`` files into ORM objects.
+
+The MAUG summary files are CSV‑like text files with columns such as DATE, TIME,
+LAT, LON, NS, EW, POWER(V), TEMP(C), and others. This module is responsible
+for:
+
+* Converting raw string fields (e.g. ``"2024-May-16"``, ``"20:55:59"``) into
+    typed Python values (``datetime``, ``float``, ``int``).
+* Constructing :class:`app.backend.eti.models.MaugSummarySample` instances.
+* Persisting those instances to the database in a single transaction.
+"""
+
 
 def parse_lat_lon(
-    lat_str: str, ns_str: str, lon_str: str, ew_str: str
+    lat_str: str,
+    ns_str: str,
+    lon_str: str,
+    ew_str: str,
 ) -> tuple[float, float]:
     lat = float(lat_str.strip())
     if ns_str.strip().lower() == "s":
@@ -25,18 +40,35 @@ def parse_lat_lon(
 
 
 def parse_timestamp(date_str: str, time_str: str) -> datetime:
-    # Example: "2024-May-16" + "20:55:59"
+    """Combine separate DATE/TIME fields into a single ``datetime``.
+
+    The MAUG export uses an abbreviated month name, for example::
+
+        DATE = "2024-May-16"
+        TIME = "20:55:59"
+
+    which we parse using the ``"%Y-%b-%d %H:%M:%S"`` strptime pattern.
+    """
+
     return datetime.strptime(
         f"{date_str.strip()} {time_str.strip()}", "%Y-%b-%d %H:%M:%S"
     )
 
 
 def parse_summary_file(path: Path) -> List[MaugSummarySample]:
+    """Parse a MAUG summary file into detached ORM objects.
+
+    The returned :class:`MaugSummarySample` instances are not yet associated
+    with any SQLAlchemy session, so callers are free to decide how and when
+    to persist them.
+    """
+
     items: List[MaugSummarySample] = []
 
     with path.open("r", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            # Skip rows that do not have the minimum timestamp information.
             if not row.get("DATE") or not row.get("TIME"):
                 continue
 
@@ -80,7 +112,21 @@ def parse_summary_file(path: Path) -> List[MaugSummarySample]:
 
 
 def load_summary_file(db: Session, path: Path) -> int:
-    """Parse and insert all rows from a summary file, returning count inserted."""
+    """Parse a summary file and insert all rows in a single transaction.
+
+    Parameters
+    ----------
+    db:
+        An active SQLAlchemy :class:`Session` bound to the target database.
+    path:
+        Filesystem path to the MAUG ``*_Summary.txt`` file to be imported.
+
+    Returns
+    -------
+    int
+        The number of :class:`MaugSummarySample` rows persisted.
+    """
+
     samples = parse_summary_file(path)
     db.add_all(samples)
     db.commit()
