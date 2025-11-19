@@ -14,24 +14,30 @@ jobs:
       run:
         working-directory: backend
     steps:
+       ## Clones repo onto the runner so all files are available.
       - name: Checkout
         uses: actions/checkout@v4
 
+      ## project-local Python package + environment manager + runner
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
+      ## Install dev dependencies
       - name: Sync (dev)
         run: uv sync --dev
 
+      ## Run linters, type-checker, and tests
       - name: Ruff lint
         run: uv run ruff check .
 
       - name: Ruff format check
         run: uv run ruff format --check .
 
+      ## Type-checking
       - name: Mypy
         run: uv run mypy .
 
+      ## Unit tests
       - name: Pytest
         env:
           PYTHONPATH: ${{ github.workspace }}/backend

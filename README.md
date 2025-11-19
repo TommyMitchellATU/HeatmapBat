@@ -1,72 +1,74 @@
 ## Project overview
 
-- Root `docker-compose.yml` (repo root): Orchestrates the local stack:
+- Root `docker-compose.yml`: orchestrates the local stack:
 	- `db` (Postgres + PostGIS) with init script `db/init.sql` enabling the PostGIS extension
 	- `redis` (Redis 7) for caching/queues
 	- `minio` (S3-compatible storage) with console at http://localhost:9001
-	- `api` (this FastAPI app), hot-reloading with your local source mounted
-- `backend/Dockerfile`: Builds the API container on Python 3.11 and installs dependencies using uv
-- `backend/pyproject.toml`: Declares Python dependencies and tool configs (ruff/mypy/pytest)
+	- `api` (FastAPI app in `backend/app/main.py`), hot-reloading with your local source mounted
+- `backend/Dockerfile`: builds the API container on Python 3.11 and installs dependencies using `uv`
+- `backend/pyproject.toml`: declares Python dependencies and tool configs (ruff/mypy/pytest)
 - `backend/app/main.py`: FastAPI app with operations endpoints (`/health`, `/live`)
-- `backend/app/backend/tests/test_health.py`: Example pytest exercising `/health`
+- `backend/app/backend/tests/test_health.py`: example pytest exercising `/health`
 - `backend/app/backend/eti/**`: ETL scaffold (extract/transform/load) — placeholder modules not yet wired into the API
-- `backend/.github/workflows/ci.yml`: CI pipeline that runs lint, type-check, and tests within `backend/`
+- `.pre-commit-config.yaml`: pre-commit hooks for formatting, linting, and basic hygiene
+- `.gitattributes`: normalize line endings
+- `.env` (optional): overrides environment variables for `docker compose`
 
 ## Project structure
 
 ```
-backend/
-	Dockerfile                  # API container (Python 3.11 + uv)
-	pyproject.toml              # Python deps + tool configs (ruff/mypy/pytest)
-	app/
-		main.py                   # FastAPI app (/health, /live)
-		backend/
-			eti/                    # ETL scaffold (package now importable)
-				__init__.py
-				pipeline.py           # run_etl(input_dir, output_dir)
-				extract/
-					__init__.py         # readers for raw sources
-				transform/
-					__init__.py         # normalization / features
-				load/
-					__init__.py         # loaders (parquet, PostGIS, S3) — placeholder
-			tests/
-				test_health.py        # sample pytest hitting /health
+.
+├── docker-compose.yml
+├── backend/
+│   ├── Dockerfile                  # API container (Python 3.11 + uv)
+│   ├── pyproject.toml              # Python deps + tool configs (ruff/mypy/pytest)
+│   └── app/
+│       ├── main.py                 # FastAPI app (/health, /live)
+│       └── backend/
+│           ├── eti/                # ETL scaffold (package importable as backend.eti)
+│           │   ├── __init__.py
+│           │   ├── __main__.py
+│           │   ├── cli_import.py
+│           │   ├── db.py
+│           │   ├── models.py
+│           │   ├── pipeline.py     # future run_etl orchestration
+│           │   ├── extract/
+│           │   │   ├── __init__.py
+│           │   │   └── summary_import.py
+│           │   ├── transform/
+│           │   │   └── __init__.py
+│           │   └── load/
+│           │       └── __init__.py
+│           └── tests/
+│               └── test_health.py  # pytest hitting /health
+├── data/
+│   └── MAUG-1397_A_Summary.txt     # example raw input
+└── db/
+    └── init.sql                    # enables PostGIS extension
 ```
 
-## Project structure
+## Services and flow
 
-- docker-compose.yml (repo root)
-	- One file that starts everything for local dev. It runs 4 containers:
-		- db = Postgres with PostGIS (spatial database)
-		- redis = in‑memory cache/queue
-		- minio = S3-compatible file storage (with a web console)
-		- api = this Python FastAPI app, with auto‑reload for quick iteration
+- `docker-compose.yml`
+	- Starts 4 containers for local dev:
+		- `db` = Postgres with PostGIS (spatial database)
+		- `redis` = in-memory cache/queue
+		- `minio` = S3-compatible file storage (with a web console)
+		- `api` = Python FastAPI app, with auto-reload for quick iteration
 
-- backend/
-	- Dockerfile: recipe to build the api container (Python 3.11 + uv package manager)
-	- pyproject.toml: where Python dependencies (fastapi, uvicorn, etc.) and tools (pytest, ruff, mypy) are declared
-	- app/ (Python package named "app")
-		- main.py: the minimal web server. It exposes /health and /live for checks.
-		- backend/eti/: ETL scaffold (read/clean/write data). It’s a separate package so data jobs don’t mix with the web app.
-			- extract/: functions that read raw inputs (CSV/TXT/metadata)
-			- transform/: pure data transformations (timestamps, geotagging, features)
-			- load/: writers to Parquet, PostGIS, and S3
-			- pipeline.py: a single function (run_etl) that coordinates extract→transform→load
-		- backend/tests/: example tests that call the API in‑process
-	- .github/workflows/ci.yml: CI pipeline that installs deps, lints, type‑checks, and runs tests
+- `backend/app` (Python package `app`)
+	- `main.py`: minimal web server. Exposes `/health` and `/live` for checks.
+	- `backend/eti/`: ETL scaffold (read/clean/write data). Separate from the web app so batch jobs stay decoupled.
+		- `extract/`: functions that will read raw inputs (CSV/TXT/metadata)
+		- `transform/`: pure data transformations (timestamps, geotagging, features)
+		- `load/`: writers to Parquet, PostGIS, and S3 (planned)
+		- `pipeline.py`: future `run_etl` function to coordinate extract → transform → load
+	- `backend/tests/`: example tests that call the API in-process
 
-- db/init.sql
+- `db/init.sql`
 	- Enables PostGIS in the local database so you can store/query geometry types used in heatmaps.
 
-- .env
-	- Environment variables loaded by docker compose (for example, credentials or overrides). If missing, defaults are used from compose.
-
-- .pre-commit-config.yaml
-	- Git hooks that run on commit to keep diffs clean (line endings), code formatted, and basic issues caught early.
-
-- .gitattributes
-	- Ensures consistent LF line endings across OSes (prevents CRLF/LF flip‑flop on Windows).
+## Running the stack
 
 ```bash
 # Build images and start services in the background
@@ -78,43 +80,39 @@ curl http://localhost:8000/health
 # Inspect PostGIS installation (optional)
 docker compose exec db psql -U app -d app -c "SELECT PostGIS_Full_Version();"
 
-# Open MinIO console (optional): http://localhost:9001 (user: minioadmin / pass: minioadmin)
+# Open MinIO console (optional)
+xdg-open http://localhost:9001 || "$BROWSER" http://localhost:9001
 ```
 
 How it works:
 - The API container runs `uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000`
 - `./backend` is bind-mounted to `/app` in the container for hot reload while you edit code locally
-- Environment variables for DB/Redis/S3 are injected by compose
+- Environment variables for DB/Redis/S3 are injected by compose (and can be overridden via `.env`)
 
-## Tests
+## Tests and quality
+
 ```bash
 # Run the test suite inside the API container
 docker compose exec api uv run pytest -q
 
+# Lint, format-check, and type-check (from backend/)
+cd backend
+uv run ruff check .
+uv run mypy .
+uv run pytest -q
+
 # Run pre-commit hooks locally (format, lint, basic checks)
 pre-commit run --all-files
-
-
-flow:
-- Extract raw files/metadata, transform/enrich (timestamps, geotagging, features)
-- Load partitioned Parquet to S3 (MinIO) and geometries/aggregates to PostGIS
-- Optionally queue jobs/status via Redis
-
-## Troubleshooting
-
-- API not responding on http://localhost:8000/health
-	- Check logs: `docker compose logs -f api`
-	- Ensure deps are installed (container does `uv sync` from `pyproject.toml`). We require `fastapi[standard]` for the `fastapi dev` CLI.
-- Port conflicts
-	- Postgres: 5432, Redis: 6379, API: 8000, MinIO: 9000/9001. Stop local services or change ports in `docker-compose.yml`.
-- Python version / lock mismatch
-	- Dockerfile uses Python 3.11. If you add a lockfile later, regenerate it under 3.11 to match the image.
-- Windows CRLF line endings
-	- The repo uses `.gitattributes` to enforce LF. If hooks fix line endings during commit, re-run: `git add -A` then `git commit -m ...`.
-
 ```
 
-## Explenation of each part
+## High-level data flow (planned)
+
+- Extract raw files/metadata from `data/` and external sources
+- Transform/enrich (timestamps, geotagging, features) in `backend/app/backend/eti/transform`
+- Load partitioned Parquet to S3/MinIO and geometries/aggregates to PostGIS
+- Optionally queue jobs/status via Redis
+
+## Explanation of each part
 
 HeatmapBat aims to process geospatial time-series at scale and serve aggregated insights. The current structure sets us up for reliability and speed:
 
