@@ -1,54 +1,58 @@
-# HeatmapBat Backend Usage Cheat Sheet
+# HeatmapBat Backend – Current Usage Cheat Sheet
 
-## Top-Level
-
-- `docker-compose.yml`: Run full stack: FastAPI API, Postgres/PostGIS, Redis, MinIO.
-  - Start stack:
-    ```bash
-    cd /workspaces/HeatmapBat
-    docker compose up -d --build
-    ```
-  - Stop stack:
-    ```bash
-    docker compose down
-    ```
-- `db/init.sql`: Initializes Postgres with PostGIS extension and app schema.
+This file focuses only on **functionality that exists and works today**:
+health-checked FastAPI API, ETL import of a MAUG summary file into Postgres,
+and basic inspection via SQL or Python.
 
 ---
 
-## Backend Project (`backend/`)
+## 1. Run the full stack (API + DB + Redis + MinIO)
 
-- `Dockerfile`: Image for `api` service; runs FastAPI via `uv` (Python 3.11).
-- `pyproject.toml`: Python project configuration and dependencies.
-- `pytest.ini`: Pytest settings.
-
-**Common commands (run from `backend/`):**
+From the repo root:
 
 ```bash
-cd backend
-uv sync                  # install dependencies
-uv run pytest -q         # run tests
-uv run ruff check .      # lint
-uv run ruff format --check  # format check
-uv run mypy .            # type-check
+cd /workspaces/HeatmapBat
+docker compose up -d --build
+```
+
+To stop:
+
+```bash
+docker compose down
+```
+
+Health check for the API:
+
+```bash
+curl http://localhost:8000/health
+```
+
+```json
+{"status": "ok"}
 ```
 
 ---
 
-## FastAPI App (`backend/app/`)
+## 2. Backend project commands (`backend/`)
 
-- `app/main.py`: FastAPI application entrypoint.
-  - Defines `app = FastAPI(...)`.
-  - Exposes health endpoints like `/health`, `/live` (tag `"ops"`).
-
-**Run dev server directly (no Docker):**
+Run these from the `backend/` folder:
 
 ```bash
-cd backend
+cd /workspaces/HeatmapBat/backend
+
+uv sync                      # install dependencies
+uv run pytest -q             # run tests
+uv run ruff check .          # lint
+uv run ruff format --check   # format check
+uv run mypy .                # type-check
+```
+
+Run the FastAPI dev server directly (without Docker):
+
+```bash
+cd /workspaces/HeatmapBat/backend
 uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000
 ```
-
-**Health check:**
 
 ```bash
 curl http://localhost:8000/health
@@ -56,112 +60,39 @@ curl http://localhost:8000/health
 
 ---
 
-## Backend Package (`backend/app/backend/`)
+## 3. ETI subsystem – importing a MAUG summary file
 
-- `backend/__init__.py`: Marks `backend` as a package.
-- `backend/tests/`:
-  - `test_health.py`: Example pytest using `TestClient` against `app.main`.
+ETI lives under `backend/app/backend/eti/` and currently supports
+importing a MAUG `*_Summary.txt` file to PostGRIS
 
-**Run this test only:**
-
-```bash
-cd backend
-uv run pytest app/backend/tests/test_health.py -q
-```
-
----
-
-## ETI Subsystem (`backend/app/backend/eti/`)
-
-- `eti/__init__.py`: Package marker.
-- `eti/__main__.py`: Allows running ETI as a module (if extended).
-
-Example (from `backend/`):
-
-```bash
-uv run python -m app.backend.eti
-```
-
-### 1. Database Helpers (`eti/db.py`)
-
-- Provides a central SQLAlchemy engine and session factory.
-- Key objects:
-  - `DATABASE_URL`: from `DATABASE_URL` env (defaults to Postgres DSN).
-  - `engine`: SQLAlchemy engine.
-  - `SessionLocal`: `sessionmaker` for DB sessions.
-  - `get_db()`: FastAPI-style dependency yielding a `Session`.
-
-**Example usage:**
-
-```python
-from app.backend.eti.db import SessionLocal
-
-db = SessionLocal()
-try:
-    # use db
-    ...
-finally:
-    db.close()
-```
-
-### 2. ORM Models (`eti/models.py`)
-
-- SQLAlchemy ORM models for ETI data.
-- Key classes:
-  - `Base`: Declarative base (`DeclarativeBase`).
-  - `MaugSummarySample`: Maps to `maug_summary_samples` table with fields:
-    - `id`, `timestamp_utc`, `lat`, `lon`, `power_v`, `temp_c`,
-      `files_count`, `scrubbed_count`, `mic0_type`, `raw_date`, `raw_time`.
-
-**Example usage:**
-
-```python
-from app.backend.eti.models import MaugSummarySample
-from app.backend.eti.db import SessionLocal
-
-db = SessionLocal()
-try:
-    sample = MaugSummarySample(lat=1.0, lon=2.0, timestamp_utc=some_datetime)
-    db.add(sample)
-    db.commit()
-finally:
-    db.close()
-```
-
-### 3. CLI Import Entrypoint (`eti/cli_import.py`)
-
-- Command-line tool to import a MAUG `*_Summary.txt` file into the DB.
-- `main()` wires:
-  - CLI argument parsing → DB session → `load_summary_file`.
-
-**Run inside the `api` container (recommended):**
+### 3.1 Run the CLI importer (inside `api` container)
 
 ```bash
 cd /workspaces/HeatmapBat
-# ensure stack is up
-docker compose up -d --build
+docker compose up -d --build   # ensure stack is running
 
-# then run import in the api container
 docker compose exec api \
   uv run python -m app.backend.eti.cli_import /data/maug/MAUG-1397_A_Summary.txt
 ```
 
-- Output: `Imported N rows from /data/maug/MAUG-1397_A_Summary.txt`.
+What this does:
 
-### 4. Extract Logic (`eti/extract/summary_import.py`)
+- Reads the MAUG summary text file from `/data/maug/MAUG-1397_A_Summary.txt`
+  (mounted into the `api` container).
+- Parses it via `app.backend.eti.extract.summary_import`.
+- Uses `SessionLocal` from `app.backend.eti.db` and the
+  `MaugSummarySample` model to insert rows into Postgres.
+- Prints `Imported N rows from ...` on success.
 
-- Parses MAUG summary CSV-like text and persists records.
-- Functions:
-  - `parse_lat_lon(lat_str, ns_str, lon_str, ew_str) -> tuple[float, float]`:
-    converts N/S/E/W into signed latitude/longitude.
-  - `parse_timestamp(date_str, time_str) -> datetime`:
-    parses values like `"2024-May-16"` + `"20:55:59"`.
-  - `parse_summary_file(path: Path) -> list[MaugSummarySample]`:
-    reads CSV rows and builds `MaugSummarySample` objects.
-  - `load_summary_file(db: Session, path: Path) -> int`:
-    parses, `db.add_all(samples)`, `db.commit()`, returns count.
+### 3.2 Direct Python usage (from a REPL inside `api` container)
 
-**Direct usage example:**
+```bash
+cd /workspaces/HeatmapBat
+docker compose up -d --build
+docker compose exec api uv run python
+```
+
+In the Python prompt:
 
 ```python
 from pathlib import Path
@@ -170,46 +101,91 @@ from app.backend.eti.extract.summary_import import load_summary_file
 
 db = SessionLocal()
 try:
-    count = load_summary_file(db, Path("/path/to/MAUG-*_Summary.txt"))
+    count = load_summary_file(db, Path("/data/maug/MAUG-1397_A_Summary.txt"))
     print("Imported", count, "rows")
 finally:
     db.close()
 ```
 
-### 5. Transform / Load Packages
+---
 
-- `eti/extract/__init__.py`: groups extract utilities (currently `summary_import`).
-- `eti/load/__init__.py`: placeholder for load-specific utilities.
-- `eti/transform/__init__.py`: placeholder for transformation logic.
+## 4. Inspecting the database
+
+The stack runs Postgres with PostGIS as the `db` service.
+
+### 4.1 Inspect via SQL (`psql`)
+
+```bash
+cd /workspaces/HeatmapBat
+docker compose up -d --build
+docker compose exec db psql -U app -d app
+```
+
+Inside `psql`:
+
+```sql
+\dt;                               -- list tables
+SELECT * FROM maug_summary_samples LIMIT 10;  -- peek data
+```
+
+Exit with:
+
+```sql
+\q
+```
+
+### 4.2 Inspect via Python (inside `api` container)
+
+```bash
+cd /workspaces/HeatmapBat
+docker compose up -d --build
+docker compose exec api uv run python
+```
+
+In the Python prompt:
+
+```python
+from app.backend.eti.db import SessionLocal
+from app.backend.eti.models import MaugSummarySample
+
+db = SessionLocal()
+try:
+    rows = db.query(MaugSummarySample).limit(5).all()
+    for row in rows:
+        print(row.id, row.timestamp_utc, row.lat, row.lon)
+finally:
+    db.close()
+```
 
 ---
 
-## End-to-End Workflows
+## 5. Tests and examples
 
-### Run Full Stack and Check API
+- API tests live in `backend/app/backend/tests/test_health.py` and call the
+  FastAPI app in-process.
 
-```bash
-cd /workspaces/HeatmapBat
-docker compose up -d --build
-curl http://localhost:8000/health
-```
-
-### Import a MAUG Summary File into DB
-
-```bash
-cd /workspaces/HeatmapBat
-docker compose up -d --build
-
-docker compose exec api \
-  uv run python -m app.backend.eti.cli_import /data/maug/MAUG-1397_A_Summary.txt
-```
-
-### Develop and Test Backend Locally (No Docker)
+Run the whole test suite:
 
 ```bash
 cd /workspaces/HeatmapBat/backend
-uv sync
-uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000
 uv run pytest -q
-uv run mypy .
 ```
+
+Run only the health test:
+
+```bash
+cd /workspaces/HeatmapBat/backend
+uv run pytest app/backend/tests/test_health.py -q
+```
+
+---
+
+## Glossary
+
+- **FastAPI (`backend/app/main.py`)** – serves `/health` and `/live`.
+- **ETI (`backend/app/backend/eti/`)** – imports MAUG summary files into
+  Postgres via `cli_import` and `summary_import`.
+- **Postgres/PostGIS (`db` service)** – stores `maug_summary_samples` table.
+- **MinIO (`minio` service)** – S3-compatible object store for future
+  file-based inputs/outputs (not required for the basic import workflow).
+
