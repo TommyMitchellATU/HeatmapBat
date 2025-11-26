@@ -180,6 +180,8 @@ uv run pytest app/backend/tests/test_health.py -q
 
 ---
 
+https://www.google.com/maps/search/?api=1&query=51.7443,-9.31424
+
 ## Glossary
 
 - **FastAPI (`backend/app/main.py`)** – serves `/health` and `/live`.

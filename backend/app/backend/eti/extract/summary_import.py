@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Iterable, List
 
 from sqlalchemy.orm import Session
 
@@ -58,60 +58,58 @@ def parse_timestamp(date_str: str, time_str: str) -> datetime:
     )
 
 
-def parse_summary_file(path: Path) -> List[MaugSummarySample]:
-    """Parse a MAUG summary file into detached ORM objects.
-
-    The returned :class:`MaugSummarySample` instances are not yet associated
-    with any SQLAlchemy session, so callers are free to decide how and when
-    to persist them.
-    """
-
+def _parse_rows(rows: Iterable[dict[str, str]]) -> List[MaugSummarySample]:
     items: List[MaugSummarySample] = []
+
+    for row in rows:
+        if not row.get("DATE") or not row.get("TIME"):
+            continue
+
+        date_str = row["DATE"]
+        time_str = row["TIME"]
+        lat_str = row["LAT"]
+        ns_str = row["NS"]
+        lon_str = row["LON"]
+        ew_str = row["EW"]
+
+        power_str = (row.get("POWER(V)") or "").strip()
+        temp_str = (row.get("TEMP(C)") or "").strip()
+        files_str = (row.get("#FILES") or "").strip()
+        scrubbed_str = (row.get("#SCRUBBED") or "").strip()
+        mic0_type = (row.get("MIC0 TYPE") or "").strip()
+
+        timestamp = parse_timestamp(date_str, time_str)
+        lat, lon = parse_lat_lon(lat_str, ns_str, lon_str, ew_str)
+
+        power_v = float(power_str) if power_str else None
+        temp_c = float(temp_str) if temp_str else None
+        files_count = int(files_str) if files_str else None
+        scrubbed_count = int(scrubbed_str) if scrubbed_str else None
+
+        items.append(
+            MaugSummarySample(
+                timestamp_utc=timestamp,
+                lat=lat,
+                lon=lon,
+                power_v=power_v,
+                temp_c=temp_c,
+                files_count=files_count,
+                scrubbed_count=scrubbed_count,
+                mic0_type=mic0_type or None,
+                raw_date=date_str.strip(),
+                raw_time=time_str.strip(),
+            )
+        )
+
+    return items
+
+
+def parse_summary_file(path: Path) -> List[MaugSummarySample]:
+    """Parse a MAUG summary file from the local filesystem."""
 
     with path.open("r", newline="") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            # Skip rows that do not have the minimum timestamp information.
-            if not row.get("DATE") or not row.get("TIME"):
-                continue
-
-            date_str = row["DATE"]
-            time_str = row["TIME"]
-            lat_str = row["LAT"]
-            ns_str = row["NS"]
-            lon_str = row["LON"]
-            ew_str = row["EW"]
-
-            power_str = (row.get("POWER(V)") or "").strip()
-            temp_str = (row.get("TEMP(C)") or "").strip()
-            files_str = (row.get("#FILES") or "").strip()
-            scrubbed_str = (row.get("#SCRUBBED") or "").strip()
-            mic0_type = (row.get("MIC0 TYPE") or "").strip()
-
-            timestamp = parse_timestamp(date_str, time_str)
-            lat, lon = parse_lat_lon(lat_str, ns_str, lon_str, ew_str)
-
-            power_v = float(power_str) if power_str else None
-            temp_c = float(temp_str) if temp_str else None
-            files_count = int(files_str) if files_str else None
-            scrubbed_count = int(scrubbed_str) if scrubbed_str else None
-
-            items.append(
-                MaugSummarySample(
-                    timestamp_utc=timestamp,
-                    lat=lat,
-                    lon=lon,
-                    power_v=power_v,
-                    temp_c=temp_c,
-                    files_count=files_count,
-                    scrubbed_count=scrubbed_count,
-                    mic0_type=mic0_type or None,
-                    raw_date=date_str.strip(),
-                    raw_time=time_str.strip(),
-                )
-            )
-
-    return items
+        return _parse_rows(reader)
 
 
 def load_summary_file(db: Session, path: Path) -> int:

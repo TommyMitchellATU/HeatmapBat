@@ -24,8 +24,9 @@ def main() -> None:
     parser.add_argument(
         "path",
         type=str,
-        help="Path to MAUG *_Summary.txt file to import",
+        help="Path to MAUG *_Summary.txt file to import from local filesystem",
     )
+
     args = parser.parse_args()
 
     path = Path(args.path)
