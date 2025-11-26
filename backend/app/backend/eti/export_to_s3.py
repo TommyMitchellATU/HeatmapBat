@@ -11,8 +11,8 @@ def upload_csv(path: Path, key: str) -> None:
 
 
 def main() -> None:
-    # Default locations mirror the current docker-compose mounts.
-    csv_path = Path("maug_summary_samples_combined.csv")
+    # CSV created in the repo root's data/ directory, mounted at /data.
+    csv_path = Path("/data/maug_summary_samples_combined.csv")
     key = "maug_summary_samples_combined.csv"
     upload_csv(csv_path, key)
     print(f"Uploaded {csv_path} to {key} in configured bucket")

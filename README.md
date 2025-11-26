@@ -20,18 +20,26 @@
 .
 ├── docker-compose.yml
 ├── backend/
-│   ├── Dockerfile                  # API container (Python 3.11 + uv)
-│   ├── pyproject.toml              # Python deps + tool configs (ruff/mypy/pytest)
+│   ├── Dockerfile                       # API container (Python 3.11 + uv)
+│   ├── pyproject.toml                   # Python deps + tool configs (ruff/mypy/pytest)
+│   ├── pytest.ini
+│   ├── USAGE.md                         # Backend-focused usage guide
+│   ├── uv.lock
 │   └── app/
-│       ├── main.py                 # FastAPI app (/health, /live)
+│       ├── __init__.py
+│       ├── .gitignore
+│       ├── main.py                      # FastAPI app (/health, /live)
 │       └── backend/
-│           ├── eti/                # ETL scaffold (package importable as backend.eti)
+│           ├── __init__.py
+│           ├── eti/                     # ETL package
 │           │   ├── __init__.py
 │           │   ├── __main__.py
-│           │   ├── cli_import.py
-│           │   ├── db.py
-│           │   ├── models.py
-│           │   ├── pipeline.py     # future run_etl orchestration
+│           │   ├── cli_import.py        # CLI: import a summary file into Postgres
+│           │   ├── db.py                # SessionLocal and engine
+│           │   ├── models.py            # SQLAlchemy models (MaugSummarySample)
+│           │   ├── pipeline.py          # future run_etl orchestration
+│           │   ├── export_to_s3.py      # upload combined CSV to MinIO
+│           │   ├── s3.py                # MinIO/S3 helper functions
 │           │   ├── extract/
 │           │   │   ├── __init__.py
 │           │   │   └── summary_import.py
@@ -40,11 +48,19 @@
 │           │   └── load/
 │           │       └── __init__.py
 │           └── tests/
-│               └── test_health.py  # pytest hitting /health
+│               └── test_health.py       # pytest hitting /health
 ├── data/
-│   └── MAUG-1397_A_Summary.txt     # example raw input
+│   ├── GANN-3591_A_Summary.txt
+│   ├── GANN-3591_B_Summary.txt
+│   ├── GANN-7109_A_Summary.txt
+│   ├── MAUG-0031_A_Summary.txt
+│   ├── MAUG-1397_A_Summary.txt
+│   ├── MAUG-7118_A_Summary.txt
+│   ├── MEEN-6771_A_Summary.txt
+│   ├── maug_summary_samples_combined.csv
+│   └── unique_locations.csv (optional, exported via SQL)
 └── db/
-    └── init.sql                    # enables PostGIS extension
+	└── init.sql                         # enables PostGIS extension
 ```
 
 ## Services and flow
