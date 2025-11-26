@@ -1,7 +1,7 @@
 ### Local development stack for HeatmapBat
 ### Rationale:
 ### - Provides PostGIS, Redis, and MinIO for realistic dev/test without cloud deps
-### - Starts the FastAPI backend with hot reload, mounting your local code
+### - Starts the FastAPI backend with hot reload, mounting local code
 services:
   db:
     # Postgres with PostGIS extension enabled

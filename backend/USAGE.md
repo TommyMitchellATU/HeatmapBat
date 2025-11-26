@@ -266,7 +266,6 @@ uv run pytest app/backend/tests/test_health.py -q
 
 ---
 
-https://www.google.com/maps/search/?api=1&query=54.7197,-7.89892
 
 ## Glossary
 
@@ -276,3 +275,6 @@ https://www.google.com/maps/search/?api=1&query=54.7197,-7.89892
 - **Postgres/PostGIS (`db` service)** – stores `maug_summary_samples` table.
 - **MinIO (`minio` service)** – S3-compatible object store for future
   file-based inputs/outputs (not required for the basic import workflow).
+
+  https://www.google.com/maps/search/?api=1&query=54.7197,-7.89892
+  
