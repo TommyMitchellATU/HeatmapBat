@@ -33,6 +33,13 @@ class MaugSummarySample(Base):
     # Surrogate primary key used internally by the database.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
+    # Identifier for the recording site / detector location.
+    # This is parsed from the MAUG summary filename (e.g. "D01" from
+    # "D01 - MAUG - 0031" or similar patterns) so that downstream analyses
+    # can group samples by site without needing to know the original folder
+    # layout.
+    site_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
     # Timestamp reconstructed from the DATE/TIME columns in the summary file.
     timestamp_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>HeatmapBat – MapLibre Heatmap</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- MapLibre GL JS from CDN -->
+    <link
+      href="https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.css"
+      rel="stylesheet"
+    />
+    <script src="https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.js"></script>
+
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      #app {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+
+      header {
+        padding: 0.5rem 1rem;
+        background: #111827;
+        color: #f9fafb;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      header h1 {
+        font-size: 1rem;
+        margin: 0;
+      }
+
+      header .controls {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+      }
+
+      header label {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
+
+      header input[type="datetime-local"] {
+        font-size: 0.8rem;
+        padding: 0.1rem 0.2rem;
+      }
+
+      header button {
+        padding: 0.25rem 0.75rem;
+        border-radius: 0.25rem;
+        border: none;
+        background: #2563eb;
+        color: #f9fafb;
+        cursor: pointer;
+      }
+
+      header button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+
+      #map {
+        flex: 1;
+      }
+
+      .status {
+        font-size: 0.75rem;
+        opacity: 0.8;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>HeatmapBat – Activity Heatmap</h1>
+        <div class="controls">
+          <label>
+            Start
+            <input id="start" type="datetime-local" />
+          </label>
+          <label>
+            End
+            <input id="end" type="datetime-local" />
+          </label>
+          <label>
+            Mode
+            <select id="mode">
+              <option value="points">Points</option>
+              <option value="h3">H3 bins</option>
+            </select>
+          </label>
+          <button id="load">Load</button>
+          <span class="status" id="status"></span>
+        </div>
+      </header>
+      <div id="map"></div>
+    </div>
+
+    <script>
+      // Basic MapLibre initialisation.
+      const map = new maplibregl.Map({
+        container: "map",
+        style: "https://demotiles.maplibre.org/style.json", // public demo style
+        center: [-7.0, 54.0], // Roughly Ireland; adjust as needed
+        zoom: 6,
+      });
+
+      map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+      const statusEl = document.getElementById("status");
+      const startInput = document.getElementById("start");
+      const endInput = document.getElementById("end");
+      const loadBtn = document.getElementById("load");
+      const modeSelect = document.getElementById("mode");
+
+      // Utility to build query parameters from the two datetime inputs.
+      function buildQuery() {
+        const params = new URLSearchParams();
+        if (startInput.value) {
+          params.set("start", new Date(startInput.value).toISOString());
+        }
+        if (endInput.value) {
+          params.set("end", new Date(endInput.value).toISOString());
+        }
+        const qs = params.toString();
+        return qs ? `?${qs}` : "";
+      }
+
+      async function fetchData() {
+        const qs = buildQuery();
+        statusEl.textContent = "Loading points...";
+        loadBtn.disabled = true;
+        try {
+          const mode = modeSelect.value;
+          const path = mode === "h3" ? "/api/heatmap/h3" : "/api/heatmap/points";
+
+          const resp = await fetch(`${path}${qs}`);
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+          }
+          const data = await resp.json();
+
+          // Summarise how many points and the total raw/effort-normalised
+          // weights we received. This is useful for sanity-checking that the
+          // API is returning what we expect when experimenting with
+          // normalisation schemes.
+          const totalRaw = data.reduce((acc, p) => acc + (p.raw_count || 0), 0);
+          const totalEffort = data.reduce(
+            (acc, p) => acc + (p.effort_normalised_weight || 0),
+            0,
+          );
+
+          statusEl.textContent = `Loaded ${data.length} ${
+            mode === "h3" ? "H3 cells" : "points"
+          } (raw sum=${totalRaw.toFixed(1)}, effort sum=${totalEffort.toFixed(1)})`;
+
+          return data;
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "Failed to load points";
+          return [];
+        } finally {
+          loadBtn.disabled = false;
+        }
+      }
+
+      // Convert the API's response into a GeoJSON FeatureCollection that
+      // MapLibre can consume directly as a source. For point mode this is a
+      // 1:1 mapping of samples; for H3 mode each feature corresponds to a
+      // single H3 cell centroid.
+      function toGeoJSON(data) {
+        const mode = modeSelect.value;
+        return {
+          type: "FeatureCollection",
+          features: data.map((p) => ({
+            type: "Feature",
+            geometry: {
+              type: "Point",
+              coordinates: [p.lon, p.lat],
+            },
+            properties: {
+              // Use the effort-normalised weight for rendering. For now this
+              // is identical to the raw count, but the extra field keeps the
+              // wiring in place for future effort-aware models.
+              weight: p.effort_normalised_weight,
+              raw_count: p.raw_count,
+              timestamp_utc: p.timestamp_utc,
+              mode,
+              h3_index: p.h3_index || null,
+            },
+          })),
+        };
+      }
+
+      async function loadHeatmap() {
+        const data = await fetchData();
+        const geojson = toGeoJSON(data);
+
+        const sourceId = "heatmap-points";
+        const heatLayerId = "heatmap-layer";
+
+        if (map.getSource(sourceId)) {
+          map.getSource(sourceId).setData(geojson);
+        } else {
+          map.addSource(sourceId, {
+            type: "geojson",
+            data: geojson,
+          });
+
+          // Heatmap style based on MapLibre / Mapbox heatmap expression support.
+          map.addLayer({
+            id: heatLayerId,
+            type: "heatmap",
+            source: sourceId,
+            maxzoom: 15,
+            paint: {
+              // Increase the heatmap weight based on point weight property.
+              "heatmap-weight": ["interpolate", ["linear"], ["get", "weight"], 0, 0, 10, 1],
+
+              // Increase the heatmap intensity as zoom level increases.
+              "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 15, 3],
+
+              // Color ramp for heatmap.
+              "heatmap-color": [
+                "interpolate",
+                ["linear"],
+                ["heatmap-density"],
+                0,
+                "rgba(33,102,172,0)",
+                0.2,
+                "rgb(103,169,207)",
+                0.4,
+                "rgb(209,229,240)",
+                0.6,
+                "rgb(253,219,199)",
+                0.8,
+                "rgb(239,138,98)",
+                1,
+                "rgb(178,24,43)",
+              ],
+
+              // Adjust the heatmap radius by zoom level.
+              "heatmap-radius": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                0,
+                2,
+                9,
+                20,
+              ],
+
+              // Transition from heatmap to circle layer by zoom level if
+              // circles are added later; for now keep opacity fixed.
+              "heatmap-opacity": 0.9,
+            },
+          });
+        }
+      }
+
+      loadBtn.addEventListener("click", () => {
+        loadHeatmap();
+      });
+
+      // Once the map style has loaded, fetch and render an initial heatmap
+      // without any explicit time filter.
+      map.on("load", () => {
+        loadHeatmap();
+      });
+    </script>
+  </body>
+</html>

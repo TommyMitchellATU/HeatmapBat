@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -58,8 +58,35 @@ def parse_timestamp(date_str: str, time_str: str) -> datetime:
     )
 
 
-def _parse_rows(rows: Iterable[dict[str, str]]) -> List[MaugSummarySample]:
+def _derive_site_id_from_filename(source_path: Path) -> Optional[str]:
+    """Derive a site identifier from a MAUG summary filename.
+
+    You have renamed exported summary files so that the *site* appears at the
+    very front of the filename, for example::
+
+        D04-MAUG-3992_A_Summary.txt
+        D01-MAUG-0031_A_Summary.txt
+        D02A-GANN-4098_B_Summary.txt
+
+    This helper relies only on that convention and does not care about the
+    surrounding folder layout. It treats everything before the first dash as
+    the site identifier, so the examples above yield ``"D04"``, ``"D01"`` and
+    ``"D02A"`` respectively.
+    """
+
+    stem = source_path.stem  # e.g. "D04-MAUG-3992_A_Summary"
+
+    # The site id is the first chunk before the first "-".
+    first = stem.split("-", 1)[0].strip()
+    return first or None
+
+
+def _parse_rows(
+    rows: Iterable[dict[str, str]], source_path: Path
+) -> List[MaugSummarySample]:
     items: List[MaugSummarySample] = []
+
+    site_id = _derive_site_id_from_filename(source_path)
 
     for row in rows:
         if not row.get("DATE") or not row.get("TIME"):
@@ -89,6 +116,7 @@ def _parse_rows(rows: Iterable[dict[str, str]]) -> List[MaugSummarySample]:
         items.append(
             MaugSummarySample(
                 timestamp_utc=timestamp,
+                site_id=site_id,
                 lat=lat,
                 lon=lon,
                 power_v=power_v,
@@ -109,7 +137,7 @@ def parse_summary_file(path: Path) -> List[MaugSummarySample]:
 
     with path.open("r", newline="") as f:
         reader = csv.DictReader(f)
-        return _parse_rows(reader)
+        return _parse_rows(reader, source_path=path)
 
 
 def load_summary_file(db: Session, path: Path) -> int:

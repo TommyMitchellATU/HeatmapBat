@@ -12,6 +12,7 @@ dependencies = [
     "boto3",
     "botocore",
     "boto3-stubs[essential]",
+    "h3>=4.3.1",
 ]
 
 [project.optional-dependencies]
