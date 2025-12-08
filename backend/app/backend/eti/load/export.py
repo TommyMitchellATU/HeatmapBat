@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Export helpers for turning ETI samples into flat files.
 
-Right now this module focuses on writing map‑ready CSV files from the
-``maug_summary_samples`` table. The goal is to keep the public surface small
-and easy to call from both CLIs and tests.
+This module currently focuses on writing map‑ready CSV files from the
+``maug_summary_samples`` table. The exported format is intentionally simple so
+that spreadsheets, GIS tools, or web maps can consume it without any
+additional processing.
 """
 
 from collections.abc import Iterable
@@ -26,21 +27,23 @@ def _iter_samples(
 ) -> Iterable[MaugSummarySample]:
     """Yield ``MaugSummarySample`` rows filtered by an optional date range.
 
-    Parameters
-    ----------
-    db:
-        Active SQLAlchemy session.
-    start, end:
-        Inclusive start and exclusive end bounds on ``timestamp_utc``. If
-        either is ``None`` it is not applied.
+    This helper keeps the query logic in one place so both CSV and GeoJSON
+    exporters (and any future loaders) can share the same selection
+    semantics.
     """
 
+    # Start from the full table.
     stmt = select(MaugSummarySample)
+
+    # Apply inclusive lower bound on timestamp, if provided.
     if start is not None:
         stmt = stmt.where(MaugSummarySample.timestamp_utc >= start)
+
+    # Apply exclusive upper bound on timestamp, if provided.
     if end is not None:
         stmt = stmt.where(MaugSummarySample.timestamp_utc < end)
 
+    # Stream results back as ORM instances rather than raw rows.
     for row in db.execute(stmt).scalars():
         yield row
 
@@ -54,13 +57,29 @@ def export_samples_to_csv(
 ) -> int:
     """Export samples to a CSV file and return the number of rows written.
 
-    The CSV columns are chosen to be immediately useful for mapping and
-    analysis tools: identifiers, timestamp, location, telemetry, and raw
-    string fields from the source files.
+    Parameters
+    ----------
+    db:
+        An open SQLAlchemy :class:`Session` bound to the application
+        database.
+    out_path:
+        Filesystem path where the CSV should be written. Parent
+        directories will be created automatically.
+    start, end:
+        Optional date bounds on ``timestamp_utc``. ``start`` is inclusive
+        and ``end`` is exclusive, which makes it easy to export whole days
+        (e.g. ``--start 2024-05-16 --end 2024-05-17``).
+
+    Returns
+    -------
+    int
+        The number of data rows written (not counting the header).
     """
 
     import csv
 
+    # Ensure the output directory exists so callers can safely point at
+    # nested paths such as ``/data/exports/...``.
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     fieldnames = [
@@ -82,6 +101,7 @@ def export_samples_to_csv(
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
+        # Iterate over filtered rows and write one CSV line per sample.
         for row in _iter_samples(db, start=start, end=end):
             writer.writerow(
                 {

@@ -188,7 +188,48 @@ This will:
 - Save it inside the container at `/data/exports/...`, which corresponds to
   `data/exports/...` on the host if `data/` is mounted there.
 
-### 4.4 Upload the combined CSV to MinIO
+You can run this multiple times with different `--start`/`--end` values to
+create one CSV per day or per survey window. The exporter always talks to the
+same Postgres DB as the rest of the stack (via `DATABASE_URL`).
+
+If you want to re-run the checks that validate this exporter, execute the
+integration-style test inside the `api` container (where the `db` service is
+reachable):
+
+```bash
+cd /workspaces/HeatmapBat
+docker compose up -d --build
+docker compose exec -w /app api \
+  uv run pytest app/backend/tests/test_export.py -q
+```
+
+### 4.4 Export rows to GeoJSON for mapping
+
+To produce a GeoJSON `FeatureCollection` that can be loaded directly into web
+maps or GIS tools, use the GeoJSON exporter CLI:
+
+```bash
+cd /workspaces/HeatmapBat
+docker compose up -d --build
+
+docker compose exec api \
+  uv run python -m app.backend.eti.load.cli_geojson_export \
+  --start "2024-05-16" \
+  --end "2024-05-17" \
+  /data/exports/maug_points_2024-05-16.geojson
+```
+
+This will:
+
+- Query `maug_summary_samples` with the same date filters as the CSV
+  exporter.
+- Build a standard GeoJSON object with `Point` features using `[lon, lat]`
+  coordinates.
+- Attach the sample attributes as `properties` on each feature.
+- Write the result to `/data/exports/...` (and thus `data/exports/...` on the
+  host).
+
+### 4.5 Upload the combined CSV to MinIO
 
 To keep a copy of the combined CSV in MinIO (S3-compatible object store),
 run:
