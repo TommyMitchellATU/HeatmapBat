@@ -159,7 +159,36 @@ docker compose exec db psql -U app -d app -c \
 This creates `data/maug_summary_samples_combined.csv` containing rows from
 every imported summary file.
 
-### 4.3 Upload the combined CSV to MinIO
+### 4.3 Export rows via ETI CSV exporter (date-filtered)
+
+As an alternative to the raw `psql` export, you can use the ETI
+``cli_export`` helper to write a map-ready CSV from inside the `api`
+container. This is useful when you want to filter by date range.
+
+Run from the repo root:
+
+```bash
+cd /workspaces/HeatmapBat
+docker compose up -d --build
+
+docker compose exec api \
+  uv run python -m app.backend.eti.load.cli_export \
+  --start "2024-05-16" \
+  --end "2024-05-17" \
+  /data/exports/maug_points_2024-05-16.csv
+```
+
+This will:
+
+- Query `maug_summary_samples` for rows where `timestamp_utc` is between
+  the given `--start` (inclusive) and `--end` (exclusive) dates.
+- Write a CSV with columns `id`, `timestamp_utc`, `lat`, `lon`, `power_v`,
+  `temp_c`, `files_count`, `scrubbed_count`, `mic0_type`, `raw_date`,
+  `raw_time`.
+- Save it inside the container at `/data/exports/...`, which corresponds to
+  `data/exports/...` on the host if `data/` is mounted there.
+
+### 4.4 Upload the combined CSV to MinIO
 
 To keep a copy of the combined CSV in MinIO (S3-compatible object store),
 run:

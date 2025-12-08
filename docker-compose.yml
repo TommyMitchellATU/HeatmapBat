@@ -81,7 +81,7 @@ services:
     volumes:
       # Bind mount for hot reload: edit files locally, server reloads inside the container
       - ./backend:/app
-      - ./data:/data:ro
+      - ./data:/data
     # Use fastapi's dev server (available via fastapi[standard]) for auto-reload
     command: uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000
 
