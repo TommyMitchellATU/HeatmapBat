@@ -13,9 +13,12 @@ the map consumes. Two flavours of data are exposed:
 """
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import h3
+import pandas as pd
 from fastapi import Depends, FastAPI, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -139,6 +142,24 @@ class H3Cell(BaseModel):
     effort_normalised_weight: float
 
 
+class H3ParquetCell(BaseModel):
+    """Aggregated statistics for a single H3 hexagon from Parquet.
+
+    This mirrors :class:`H3Cell` but does not recompute aggregates from the
+    raw database on each request. Instead it reads precomputed analytics from
+    the ETI transform stage written as Parquet files.
+    """
+
+    h3_index: str
+    lat: float
+    lon: float
+    # Aggregated counts as produced by the analytics layer.
+    raw_count_sum: float
+    sample_count: int
+    # Hex boundary as [lon, lat] pairs (single ring) for GeoJSON.
+    polygon: list[tuple[float, float]]
+
+
 @app.get("/api/heatmap/h3", response_model=List[H3Cell], tags=["heatmap"])
 def get_heatmap_h3(
     start: Optional[datetime] = Query(
@@ -195,7 +216,7 @@ def get_heatmap_h3(
     for row in db.execute(stmt).scalars():
         # Same raw proxy as for individual points.
         raw = float(row.files_count or 1)
-        idx = h3.geo_to_h3(row.lat, row.lon, resolution)
+        idx = h3.latlng_to_cell(row.lat, row.lon, resolution)
 
         bucket = buckets[idx]
         bucket["raw_count"] += raw
@@ -219,6 +240,124 @@ def get_heatmap_h3(
                 lon=lon,
                 raw_count=raw_count,
                 effort_normalised_weight=effort_weight,
+            )
+        )
+
+    return cells
+
+
+@app.get("/api/heatmap/h3_parquet", response_model=List[H3ParquetCell], tags=["heatmap"])
+def get_heatmap_h3_parquet(
+    start: Optional[date] = Query(
+        None,
+        description=(
+            "Inclusive lower bound on date (YYYY-MM-DD) for which analytics "
+            "should be loaded. If omitted, all available dates are included."
+        ),
+    ),
+    end: Optional[date] = Query(
+        None,
+        description=(
+            "Exclusive upper bound on date (YYYY-MM-DD). If omitted, all "
+            "available dates up to the latest are included."
+        ),
+    ),
+    analytics_dir: str = Query(
+        "data/analytics/h3_daily",
+        description=(
+            "Base directory containing partitioned H3 analytics Parquet "
+            "files, typically produced by the ETI transform stage."
+        ),
+    ),
+) -> List[H3ParquetCell]:
+    """Serve H3 aggregates from precomputed Parquet files.
+
+    This endpoint avoids running H3 binning and aggregation against the live
+    database on every request. Instead it assumes that a separate ETI
+    transform has produced daily Parquet files in ``analytics_dir`` with at
+    least the following columns:
+
+    * ``time_bin_start`` – timestamp at the start of the time window,
+    * ``h3_index`` – H3 cell index, and
+    * ``raw_count_sum`` / ``sample_count`` – aggregated metrics.
+    """
+
+    base = Path(analytics_dir)
+    if not base.exists():
+        return []
+
+    # Discover candidate files matching the naming convention used by the
+    # transform layer: ``h3_analytics_YYYY-MM-DD.parquet``.
+    parquet_files = sorted(base.glob("h3_analytics_*.parquet"))
+    if not parquet_files:
+        return []
+
+    selected: List[Path] = []
+    for path in parquet_files:
+        # Extract the date component from the filename.
+        try:
+            date_str = path.stem.split("_")[-1]
+            file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            # Ignore files that do not follow the expected pattern.
+            continue
+
+        if start is not None and file_date < start:
+            continue
+        if end is not None and file_date >= end:
+            continue
+
+        selected.append(path)
+
+    if not selected:
+        return []
+
+    # Read and concatenate all selected Parquet partitions.
+    frames: List[pd.DataFrame] = []
+    for path in selected:
+        frames.append(pd.read_parquet(path))
+
+    df = pd.concat(frames, ignore_index=True)
+    if df.empty:
+        return []
+
+    # Defensive: aggregate again in case multiple partitions overlap.
+    grouped = (
+        df.groupby("h3_index", dropna=False)
+        .agg(
+            raw_count_sum=("raw_count_sum", "sum"),
+            sample_count=("sample_count", "sum"),
+        )
+        .reset_index()
+    )
+
+    # Attach centroids and polygon boundaries server-side so the frontend
+    # does not need H3 math.
+    def _centroid(idx: str) -> tuple[float, float]:
+        # v4: returns (lat, lon).
+        lat, lon = h3.cell_to_latlng(idx)  # type: ignore[attr-defined]
+        return lat, lon
+
+    def _polygon(idx: str) -> list[tuple[float, float]]:
+        # v4: returns list of (lat, lon) tuples; convert to (lon, lat).
+        boundary = h3.cell_to_boundary(idx)  # type: ignore[attr-defined]
+        return [(lon, lat) for lat, lon in boundary]
+
+    grouped[["lat", "lon"]] = grouped["h3_index"].apply(  # type: ignore[assignment]
+        lambda idx: pd.Series(_centroid(idx)),
+    )
+    grouped["polygon"] = grouped["h3_index"].apply(_polygon)
+
+    cells: List[H3ParquetCell] = []
+    for row in grouped.to_dict(orient="records"):
+        cells.append(
+            H3ParquetCell(
+                h3_index=row["h3_index"],
+                lat=float(row["lat"]),
+                lon=float(row["lon"]),
+                raw_count_sum=float(row["raw_count_sum"]),
+                sample_count=int(row["sample_count"]),
+                polygon=list(row["polygon"]),
             )
         )
 
