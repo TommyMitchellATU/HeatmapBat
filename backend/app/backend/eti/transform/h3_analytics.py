@@ -67,7 +67,9 @@ def _samples_to_dataframe(samples: Iterable[MaugSummarySample]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _attach_h3_and_time_bins(df: pd.DataFrame, config: H3AnalyticsConfig) -> pd.DataFrame:
+def _attach_h3_and_time_bins(
+    df: pd.DataFrame, config: H3AnalyticsConfig
+) -> pd.DataFrame:
     """Attach H3 index and time bin columns to the dataframe.
 
     - `h3_index`: resolution `config.resolution` index computed from lat/lon.
@@ -86,10 +88,9 @@ def _attach_h3_and_time_bins(df: pd.DataFrame, config: H3AnalyticsConfig) -> pd.
     ]
 
     # Round timestamps down to the nearest frequency bucket.
-    df["time_bin_start"] = (
-        pd.to_datetime(df["timestamp_utc"])  # ensure tz-aware/naive handled by pandas
-        .dt.floor(config.time_freq)
-    )
+    df["time_bin_start"] = pd.to_datetime(
+        df["timestamp_utc"],
+    ).dt.floor(config.time_freq)
 
     return df
 

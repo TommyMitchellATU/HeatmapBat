@@ -47,27 +47,27 @@ def live() -> HealthResponse:
 
 
 class HeatmapPoint(BaseModel):
-        """Single point used by the MapLibre heatmap layer.
+    """Single point used by the MapLibre heatmap layer.
 
-        This is intentionally small and front‑end friendly. In addition to the
-        basic location and timestamp, it exposes two weighting notions:
+    This is intentionally small and front‑end friendly. In addition to the
+    basic location and timestamp, it exposes two weighting notions:
 
-        * ``raw_count`` – the underlying detection/count proxy (currently
-            ``files_count`` from the summary file).
-        * ``effort_normalised_weight`` – a placeholder for an effort‑adjusted
-            weight. For now this equals ``raw_count``, but the field is included so
-            that future versions can divide by detector effort (e.g. hours
-            recording) without changing the API shape.
-        """
+    * ``raw_count`` – the underlying detection/count proxy (currently
+        ``files_count`` from the summary file).
+    * ``effort_normalised_weight`` – a placeholder for an effort‑adjusted
+        weight. For now this equals ``raw_count``, but the field is included so
+        that future versions can divide by detector effort (e.g. hours
+        recording) without changing the API shape.
+    """
 
-        lat: float
-        lon: float
-        # Underlying count proxy from the ETL layer (e.g. number of files).
-        raw_count: float
-        # Weight that the heatmap should ideally use; currently identical to the
-        # raw count, but reserved for effort‑normalised values.
-        effort_normalised_weight: float
-        timestamp_utc: datetime
+    lat: float
+    lon: float
+    # Underlying count proxy from the ETL layer (e.g. number of files).
+    raw_count: float
+    # Weight that the heatmap should ideally use; currently identical to the
+    # raw count, but reserved for effort‑normalised values.
+    effort_normalised_weight: float
+    timestamp_utc: datetime
 
 
 @app.get("/api/heatmap/points", response_model=List[HeatmapPoint], tags=["heatmap"])
@@ -246,7 +246,9 @@ def get_heatmap_h3(
     return cells
 
 
-@app.get("/api/heatmap/h3_parquet", response_model=List[H3ParquetCell], tags=["heatmap"])
+@app.get(
+    "/api/heatmap/h3_parquet", response_model=List[H3ParquetCell], tags=["heatmap"]
+)
 def get_heatmap_h3_parquet(
     start: Optional[date] = Query(
         None,

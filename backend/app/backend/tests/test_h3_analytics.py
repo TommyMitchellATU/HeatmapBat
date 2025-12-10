@@ -79,8 +79,20 @@ def test_attach_h3_and_time_bins_and_aggregate() -> None:
 
     # Two points very close together so they share a cell at this resolution.
     samples = [
-        DummySample(timestamp_utc=base_ts, lat=54.0, lon=-7.0, files_count=1, site_id="A"),
-        DummySample(timestamp_utc=base_ts, lat=54.0001, lon=-7.0001, files_count=2, site_id="A"),
+        DummySample(
+            timestamp_utc=base_ts,
+            lat=54.0,
+            lon=-7.0,
+            files_count=1,
+            site_id="A",
+        ),
+        DummySample(
+            timestamp_utc=base_ts,
+            lat=54.0001,
+            lon=-7.0001,
+            files_count=2,
+            site_id="A",
+        ),
     ]
 
     config = H3AnalyticsConfig(resolution=7, time_freq="1H")
@@ -107,4 +119,3 @@ def test_attach_h3_and_time_bins_and_aggregate() -> None:
     assert row["raw_count_sum"] == 3  # 1 + 2
     assert row["sample_count"] == 2
     assert row["site_id"] == "A"
-
