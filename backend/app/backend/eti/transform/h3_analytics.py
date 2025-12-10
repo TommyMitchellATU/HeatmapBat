@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 import h3
 import pandas as pd
@@ -36,7 +36,7 @@ class H3AnalyticsConfig:
     time_freq: str = "1D"
 
 
-def _samples_to_dataframe(samples: Iterable[MaugSummarySample]) -> pd.DataFrame:
+def _samples_to_dataframe(samples: Iterable[Any]) -> pd.DataFrame:
     """Convert ORM sample rows into a pandas DataFrame.
 
     The dataframe schema is intentionally small; additional columns can be

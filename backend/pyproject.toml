@@ -34,3 +34,7 @@ target-version = "py311"
 [tool.mypy]
 python_version = "3.11"
 strict = false
+
+[[tool.mypy.overrides]]
+module = ["pandas", "h3"]
+ignore_missing_imports = true
