@@ -14,6 +14,21 @@
 - `.gitattributes`: normalize line endings
 - `.env` (optional): overrides environment variables for `docker compose`
 
+## Recent changes (last 5 commits)
+
+- Map view now renders database results on the map; cross spatial occupancy and click-to-drill are planned next (`98d23f2`).
+- Added site selection and a MapLibre heat map prototype for exploration (`86dd262`).
+- Expanded comments and updated usage documentation for clarity (`72df6f8`).
+- Added exporting functionality to the load pipeline to make data egress easier (`bbad0ee`).
+- Formatting cleanup (`3c5608d`).
+
+## Map UI and heatmap APIs
+
+- Start the stack and open `http://localhost:8000/` to view the MapLibre UI. It now shows database-backed points, lets you pick a site, and renders a prototype heat layer.
+- Points endpoint: `GET /api/heatmap/points?start=...&end=...` returns raw points with `raw_count` and `effort_normalised_weight` for the heatmap.
+- Server-side H3 binning: `GET /api/heatmap/h3?resolution=7&start=...&end=...` for aggregated hex buckets (lighter on the client).
+- Parquet-backed H3: `GET /api/heatmap/h3_parquet?start=YYYY-MM-DD&end=YYYY-MM-DD` to serve precomputed analytics from `data/analytics/h3_daily`.
+
 ## Project structure
 
 ```
@@ -127,6 +142,11 @@ pre-commit run --all-files
 - Transform/enrich (timestamps, geotagging, features) in `backend/app/backend/eti/transform`
 - Load partitioned Parquet to S3/MinIO and geometries/aggregates to PostGIS
 - Optionally queue jobs/status via Redis
+
+## Upcoming map enhancements
+
+- Cross-spatial occupancy view to visualise overlap across regions.
+- Click-to-drill on a site/hex to fetch and display the underlying records.
 
 ## Explanation of each part
 

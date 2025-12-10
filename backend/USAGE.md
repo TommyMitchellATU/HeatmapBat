@@ -65,6 +65,20 @@ curl http://localhost:8000/health
 ETI lives under `backend/app/backend/eti/` and currently supports
 importing one or more MAUG `*_Summary.txt` files to Postgres.
 
+## 3b. Map UI quickstart (heatmap prototype)
+
+The FastAPI app serves a MapLibre-based UI at the root path and exposes the
+JSON APIs that feed it.
+
+1) Start the stack: `docker compose up -d --build`
+2) Open the map: http://localhost:8000/
+  - Shows database-backed points and a prototype heat layer
+  - Supports site selection from the map
+3) API endpoints the map uses (can be called directly):
+  - `GET /api/heatmap/points?start=...&end=...` — raw points with weights
+  - `GET /api/heatmap/h3?resolution=7&start=...&end=...` — server-side H3 bins
+  - `GET /api/heatmap/h3_parquet?start=YYYY-MM-DD&end=YYYY-MM-DD` — precomputed H3 from Parquet
+
 ### 3.1 Run the CLI importer (inside `api` container)
 
 ```bash
