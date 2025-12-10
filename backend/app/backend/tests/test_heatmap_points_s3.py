@@ -13,7 +13,9 @@ class _FakeS3:
     def __init__(self) -> None:
         self._objects: Dict[str, bytes] = {}
 
-    def put_geojson(self, bucket: str, key: str, features: list[dict[str, Any]]) -> None:
+    def put_geojson(
+        self, bucket: str, key: str, features: list[dict[str, Any]]
+    ) -> None:
         payload = {"type": "FeatureCollection", "features": features}
         self._objects[f"{bucket}/{key}"] = json.dumps(payload).encode()
 

@@ -13,11 +13,19 @@ class _FakeS3:
     def __init__(self) -> None:
         self._objects: Dict[str, bytes] = {}
 
-    def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # pragma: no cover - helper
+    def put_object(
+        self, Bucket: str, Key: str, Body: bytes
+    ) -> None:  # pragma: no cover - helper
         self._objects[f"{Bucket}/{Key}"] = Body
 
-    def list_objects_v2(self, Bucket: str, Prefix: str, ContinuationToken: str | None = None) -> Dict[str, Any]:
-        keys = [key.split("/", 1)[1] for key in self._objects if key.startswith(f"{Bucket}/{Prefix}")]
+    def list_objects_v2(
+        self, Bucket: str, Prefix: str, ContinuationToken: str | None = None
+    ) -> Dict[str, Any]:
+        keys = [
+            key.split("/", 1)[1]
+            for key in self._objects
+            if key.startswith(f"{Bucket}/{Prefix}")
+        ]
         return {"Contents": [{"Key": key} for key in keys], "IsTruncated": False}
 
     def get_object(self, Bucket: str, Key: str) -> Dict[str, Any]:
@@ -41,7 +49,11 @@ def test_h3_parquet_reads_from_s3(monkeypatch: Any, tmp_path: Any) -> None:
     df.to_parquet(parquet_bytes, index=False)
 
     fake = _FakeS3()
-    fake.put_object(Bucket=bucket, Key=f"{prefix}/h3_analytics_2024-05-16.parquet", Body=parquet_bytes.getvalue())
+    fake.put_object(
+        Bucket=bucket,
+        Key=f"{prefix}/h3_analytics_2024-05-16.parquet",
+        Body=parquet_bytes.getvalue(),
+    )
 
     # Monkeypatch S3 helpers used by the endpoint.
     monkeypatch.setenv("HEATMAP_H3_SOURCE", "s3")

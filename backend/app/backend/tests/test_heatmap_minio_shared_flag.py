@@ -18,8 +18,14 @@ class _FakeS3:
     def put_object(self, bucket: str, key: str, body: bytes) -> None:
         self._objects[f"{bucket}/{key}"] = body
 
-    def list_objects_v2(self, Bucket: str, Prefix: str, ContinuationToken: str | None = None) -> Dict[str, Any]:
-        keys = [k.split("/", 1)[1] for k in self._objects if k.startswith(f"{Bucket}/{Prefix}")]
+    def list_objects_v2(
+        self, Bucket: str, Prefix: str, ContinuationToken: str | None = None
+    ) -> Dict[str, Any]:
+        keys = [
+            k.split("/", 1)[1]
+            for k in self._objects
+            if k.startswith(f"{Bucket}/{Prefix}")
+        ]
         return {"Contents": [{"Key": key} for key in keys], "IsTruncated": False}
 
     def get_object(self, Bucket: str, Key: str) -> Dict[str, Any]:

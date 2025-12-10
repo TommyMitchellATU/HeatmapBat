@@ -73,7 +73,9 @@ def _resolve_source(point_var: str, hex_var: str) -> tuple[str, str]:
 
 @app.on_event("startup")
 def _ensure_bucket_on_startup() -> None:  # pragma: no cover - integration concern
-    points_source, h3_source = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
+    points_source, h3_source = _resolve_source(
+        "HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE"
+    )
     if points_source != "s3" and h3_source != "s3":
         return
     try:
@@ -165,7 +167,9 @@ def get_heatmap_points(
             try:
                 data = get_object_bytes(points_object)
             except Exception as exc:  # pragma: no cover - network failure path
-                raise HTTPException(status_code=503, detail="Unable to fetch points from object storage") from exc
+                raise HTTPException(
+                    status_code=503, detail="Unable to fetch points from object storage"
+                ) from exc
             _set_cached_bytes(points_object, data)
         if points_object.endswith(".geojson"):
             payload = json.loads(data)
@@ -219,7 +223,10 @@ def get_heatmap_points(
                 )
             return points
 
-        raise HTTPException(status_code=503, detail="Unsupported points object format from object storage")
+        raise HTTPException(
+            status_code=503,
+            detail="Unsupported points object format from object storage",
+        )
 
     stmt = select(MaugSummarySample)
     if start is not None:
@@ -408,16 +415,23 @@ def get_heatmap_h3_parquet(
             try:
                 keys = list(list_keys(prefix))
             except Exception as exc:  # pragma: no cover - network failure path
-                raise HTTPException(status_code=503, detail="Unable to list analytics objects from storage") from exc
+                raise HTTPException(
+                    status_code=503,
+                    detail="Unable to list analytics objects from storage",
+                ) from exc
 
             # Discover keys following the naming convention
             # ``h3_analytics_YYYY-MM-DD.parquet``.
             for key in keys:
                 name = os.path.basename(key)
-                if not name.startswith("h3_analytics_") or not name.endswith(".parquet"):
+                if not name.startswith("h3_analytics_") or not name.endswith(
+                    ".parquet"
+                ):
                     continue
                 try:
-                    date_str = name.removeprefix("h3_analytics_").removesuffix(".parquet")
+                    date_str = name.removeprefix("h3_analytics_").removesuffix(
+                        ".parquet"
+                    )
                     file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                 except Exception:
                     continue
@@ -430,7 +444,10 @@ def get_heatmap_h3_parquet(
                     try:
                         cached = get_object_bytes(key)
                     except Exception as exc:  # pragma: no cover - network failure path
-                        raise HTTPException(status_code=503, detail="Unable to fetch analytics object from storage") from exc
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Unable to fetch analytics object from storage",
+                        ) from exc
                     _set_cached_bytes(key, cached)
                 frames.append(pd.read_parquet(BytesIO(cached)))
         else:
