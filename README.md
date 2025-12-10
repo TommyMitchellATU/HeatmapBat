@@ -10,6 +10,14 @@ Geospatial occupancy playground: FastAPI backend, MapLibre UI, and optional MinI
 - `backend/app/backend/tests/` covers the API, S3 modes, and analytics endpoints.
 - `.env` overrides compose env (including heatmap source flags) without editing YAML.
 
+**Ports**
+
+- API (FastAPI + static UI): `8000`
+- MinIO S3 endpoint: `9000`
+- MinIO console (web UI): `9001`
+- Postgres/PostGIS: `5432` (compose-only; use `docker compose exec db ...`)
+- Redis: `6379` (compose-only; internal cache/queue)
+
 ## Run the app (local dev)
 
 ```bash
