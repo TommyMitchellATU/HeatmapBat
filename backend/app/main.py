@@ -174,7 +174,7 @@ def get_heatmap_points(
         if points_object.endswith(".geojson"):
             payload = json.loads(data)
             features = payload.get("features", [])
-            points: List[HeatmapPoint] = []
+            geojson_points: List[HeatmapPoint] = []
             for feat in features:
                 coords = feat.get("geometry", {}).get("coordinates", [None, None])
                 lon, lat = coords[0], coords[1]
@@ -188,7 +188,7 @@ def get_heatmap_points(
                 if end is not None and ts_dt >= end:
                     continue
                 raw = float(props.get("raw_count") or props.get("files_count") or 1)
-                points.append(
+                geojson_points.append(
                     HeatmapPoint(
                         lat=float(lat),
                         lon=float(lon),
@@ -197,7 +197,7 @@ def get_heatmap_points(
                         timestamp_utc=ts_dt,
                     )
                 )
-            return points
+            return geojson_points
 
         if points_object.endswith(".csv"):
             df = pd.read_csv(BytesIO(data))
@@ -205,14 +205,14 @@ def get_heatmap_points(
                 df = df[df["timestamp_utc"] >= start.isoformat()]
             if end is not None:
                 df = df[df["timestamp_utc"] < end.isoformat()]
-            points: List[HeatmapPoint] = []
+            csv_points: List[HeatmapPoint] = []
             for row in df.to_dict(orient="records"):
                 ts_str = row.get("timestamp_utc")
                 if ts_str is None:
                     continue
                 ts_dt = datetime.fromisoformat(str(ts_str))
                 raw = float(row.get("raw_count") or row.get("files_count") or 1)
-                points.append(
+                csv_points.append(
                     HeatmapPoint(
                         lat=float(row["lat"]),
                         lon=float(row["lon"]),
@@ -221,7 +221,7 @@ def get_heatmap_points(
                         timestamp_utc=ts_dt,
                     )
                 )
-            return points
+            return csv_points
 
         raise HTTPException(
             status_code=503,
@@ -234,11 +234,11 @@ def get_heatmap_points(
     if end is not None:
         stmt = stmt.where(MaugSummarySample.timestamp_utc < end)
 
-    points: List[HeatmapPoint] = []
+    db_points: List[HeatmapPoint] = []
     for row in db.execute(stmt).scalars():
         raw_count = float(row.files_count or 1)
         effort_weight = raw_count
-        points.append(
+        db_points.append(
             HeatmapPoint(
                 lat=row.lat,
                 lon=row.lon,
@@ -248,7 +248,7 @@ def get_heatmap_points(
             )
         )
 
-    return points
+    return db_points
 
 
 class H3Cell(BaseModel):
