@@ -11,6 +11,9 @@ verification.
 
 from __future__ import annotations
 
+import pytest
+from sqlalchemy.exc import OperationalError
+
 from datetime import datetime
 from pathlib import Path
 
@@ -30,7 +33,10 @@ def test_export_samples_to_csv_tmp_path(tmp_path: Path) -> None:
     * the file contains the expected header columns.
     """
 
-    db = SessionLocal()
+    try:
+        db = SessionLocal()
+    except OperationalError:
+        pytest.skip("Database not reachable; run inside the compose stack")
     try:
         sample = MaugSummarySample(
             timestamp_utc=datetime(2024, 5, 16, 20, 0, 0),
@@ -45,7 +51,10 @@ def test_export_samples_to_csv_tmp_path(tmp_path: Path) -> None:
             raw_time="20:00:00",
         )
         db.add(sample)
-        db.commit()
+        try:
+            db.commit()
+        except OperationalError:
+            pytest.skip("Database not reachable; run inside the compose stack")
 
         out_path = tmp_path / "export.csv"
         count = export_samples_to_csv(db, out_path)

@@ -90,7 +90,7 @@ def _attach_h3_and_time_bins(
     # Round timestamps down to the nearest frequency bucket.
     df["time_bin_start"] = pd.to_datetime(
         df["timestamp_utc"],
-    ).dt.floor(config.time_freq)
+    ).dt.floor(config.time_freq.lower())
 
     return df
 

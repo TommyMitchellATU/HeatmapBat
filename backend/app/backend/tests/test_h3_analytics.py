@@ -95,7 +95,7 @@ def test_attach_h3_and_time_bins_and_aggregate() -> None:
         ),
     ]
 
-    config = H3AnalyticsConfig(resolution=7, time_freq="1H")
+    config = H3AnalyticsConfig(resolution=7, time_freq="1h")
 
     df = _samples_to_dataframe(samples)
     df = _attach_h3_and_time_bins(df, config)
