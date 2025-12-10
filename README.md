@@ -1,219 +1,94 @@
-## Project overview
+## HeatmapBat
 
-- Root `docker-compose.yml`: orchestrates the local stack:
-	- `db` (Postgres + PostGIS) with init script `db/init.sql` enabling the PostGIS extension
-	- `redis` (Redis 7) for caching/queues
-	- `minio` (S3-compatible storage) with console at http://localhost:9001
-	- `api` (FastAPI app in `backend/app/main.py`), hot-reloading with your local source mounted
-- `backend/Dockerfile`: builds the API container on Python 3.11 and installs dependencies using `uv`
-- `backend/pyproject.toml`: declares Python dependencies and tool configs (ruff/mypy/pytest)
-- `backend/app/main.py`: FastAPI app with operations endpoints (`/health`, `/live`)
-- `backend/app/backend/tests/test_health.py`: example pytest exercising `/health`
-- `backend/app/backend/eti/**`: ETL scaffold (extract/transform/load) — placeholder modules not yet wired into the API
-- `.pre-commit-config.yaml`: pre-commit hooks for formatting, linting, and basic hygiene
-- `.gitattributes`: normalize line endings
-- `.env` (optional): overrides environment variables for `docker compose`
+Geospatial occupancy playground: FastAPI backend, MapLibre UI, and optional MinIO/S3-backed heatmap data. Points and H3 hex bins can come from either the database/local files or object storage with caching and simple feature flags.
 
-## Recent changes (last 5 commits)
+## Stack
 
-- Map view now renders database results on the map; cross spatial occupancy and click-to-drill are planned next (`98d23f2`).
-- Added site selection and a MapLibre heat map prototype for exploration (`86dd262`).
-- Expanded comments and updated usage documentation for clarity (`72df6f8`).
-- Added exporting functionality to the load pipeline to make data egress easier (`bbad0ee`).
-- Formatting cleanup (`3c5608d`).
+- `docker-compose.yml` brings up PostGIS, Redis, MinIO, and the FastAPI app with hot reload.
+- `backend/app/main.py` serves the web UI and heatmap APIs (`/api/heatmap/*`, `/health`, `/live`).
+- `backend/app/backend/eti/` holds ETL code and S3 helpers (list/get/ensure bucket).
+- `backend/app/backend/tests/` covers the API, S3 modes, and analytics endpoints.
+- `.env` overrides compose env (including heatmap source flags) without editing YAML.
 
-## Map UI and heatmap APIs
+## Run the app (local dev)
 
-- Start the stack and open `http://localhost:8000/` to view the MapLibre UI. It now shows database-backed points, lets you pick a site, and renders a prototype heat layer.
-- Points endpoint: `GET /api/heatmap/points?start=...&end=...` returns raw points with `raw_count` and `effort_normalised_weight` for the heatmap.
-- Server-side H3 binning: `GET /api/heatmap/h3?resolution=7&start=...&end=...` for aggregated hex buckets (lighter on the client).
-- Parquet-backed H3: `GET /api/heatmap/h3_parquet?start=YYYY-MM-DD&end=YYYY-MM-DD` to serve precomputed analytics from `data/analytics/h3_daily`.
-- MinIO-backed mode: set `HEATMAP_SOURCE=s3` (or `HEATMAP_POINTS_SOURCE` / `HEATMAP_H3_SOURCE` individually) to fetch points/hexes from MinIO; provide object keys via `points_object` and `analytics_dir`.
+```bash
+# From repo root
+docker compose up -d --build
 
-## Project structure
+# Health check and UI
+curl http://localhost:8000/health
+open http://localhost:8000/ || xdg-open http://localhost:8000/ || "$BROWSER" http://localhost:8000/
+```
+
+- The API runs `uv run fastapi dev app/main.py` and reloads on code changes.
+- Compose injects DB/Redis/S3 endpoints; bind mounts `./backend` and `./data` into the container.
+- MinIO console: http://localhost:9001 (minioadmin/minioadmin).
+
+## Data modes and feature flags
+
+- Defaults: points from PostGIS (`db`), H3 Parquet from local filesystem (`data/analytics/h3_daily`).
+- Shared toggle: `HEATMAP_SOURCE=s3` switches both points and H3 reads to MinIO/S3.
+- Per-endpoint overrides: `HEATMAP_POINTS_SOURCE` and `HEATMAP_H3_SOURCE` (`db`/`local`/`s3`).
+- Object keys/paths: `points_object` query param (default `data/exports/maug_points.geojson`); `analytics_dir` query param (default `data/analytics/h3_daily`).
+- Caching: in-memory 5-minute TTL for S3 objects; bucket auto-created at startup when S3 mode is enabled.
+
+## Uploading data to MinIO
+
+- Bucket: `heatmapbat` (auto-ensured on API startup). Access via the MinIO console at http://localhost:9001.
+- Points: upload a GeoJSON or CSV to `data/exports/maug_points.geojson` (or another key you pass via `points_object`).
+- H3 analytics: upload date-partitioned Parquet under `data/analytics/h3_daily/<YYYY>/<MM>/<DD>/...` (prefix overridable via `analytics_dir`).
+- If you prefer CLI, set `AWS_ACCESS_KEY_ID=minioadmin`, `AWS_SECRET_ACCESS_KEY=minioadmin`, and `AWS_ENDPOINT_URL=http://localhost:9000`, then use `aws s3 cp` or `aws s3 sync` against bucket `heatmapbat`.
+
+## API quick reference
+
+- `GET /health`, `GET /live`: lightweight probes.
+- `GET /api/heatmap/points?start&end&points_object=`
+  - Sources from PostGIS or S3/local GeoJSON/CSV based on flags.
+  - Returns `lat`, `lon`, `raw_count`, `effort_normalised_weight`, `timestamp_utc`.
+- `GET /api/heatmap/h3?start&end&resolution=`
+  - Server-side binning via H3 using PostGIS-backed samples.
+- `GET /api/heatmap/h3_parquet?start&end&analytics_dir=`
+  - Reads precomputed H3 Parquet locally or from MinIO/S3 (honors `HEATMAP_H3_SOURCE`).
+
+## Tests and quality
+
+```bash
+# All tests (inside container)
+docker compose exec api uv run pytest -q
+
+# Focused S3 tests
+docker compose exec api uv run pytest -q app/backend/tests/test_heatmap_points_s3.py app/backend/tests/test_h3_parquet_s3.py app/backend/tests/test_heatmap_minio_shared_flag.py
+
+# Lint/type-check (from backend/)
+cd backend
+uv run ruff check .
+uv run mypy .
+uv run pytest -q
+```
+
+## Repo layout (trimmed)
 
 ```
 .
 ├── docker-compose.yml
 ├── backend/
-│   ├── Dockerfile                       # API container (Python 3.11 + uv)
-│   ├── pyproject.toml                   # Python deps + tool configs (ruff/mypy/pytest)
+│   ├── Dockerfile
+│   ├── pyproject.toml
 │   ├── pytest.ini
-│   ├── USAGE.md                         # Backend-focused usage guide
-│   ├── uv.lock
+│   ├── USAGE.md
 │   └── app/
-│       ├── __init__.py
-│       ├── .gitignore
-│       ├── main.py                      # FastAPI app (/health, /live)
+│       ├── main.py
 │       └── backend/
-│           ├── __init__.py
-│           ├── eti/                     # ETL package
-│           │   ├── __init__.py
-│           │   ├── __main__.py
-│           │   ├── cli_import.py        # CLI: import a summary file into Postgres
-│           │   ├── db.py                # SessionLocal and engine
-│           │   ├── models.py            # SQLAlchemy models (MaugSummarySample)
-│           │   ├── pipeline.py          # future run_etl orchestration
-│           │   ├── export_to_s3.py      # upload combined CSV to MinIO
-│           │   ├── s3.py                # MinIO/S3 helper functions
-│           │   ├── extract/
-│           │   │   ├── __init__.py
-│           │   │   └── summary_import.py
-│           │   ├── transform/
-│           │   │   └── __init__.py
-│           │   └── load/
-│           │       └── __init__.py
-│           └── tests/
-│               └── test_health.py       # pytest hitting /health
-├── data/
-│   ├── GANN-3591_A_Summary.txt
-│   ├── GANN-3591_B_Summary.txt
-│   ├── GANN-7109_A_Summary.txt
-│   ├── MAUG-0031_A_Summary.txt
-│   ├── MAUG-1397_A_Summary.txt
-│   ├── MAUG-7118_A_Summary.txt
-│   ├── MEEN-6771_A_Summary.txt
-│   ├── maug_summary_samples_combined.csv
-│   └── unique_locations.csv (optional, exported via SQL)
-└── db/
-	└── init.sql                         # enables PostGIS extension
+│           ├── eti/                # ETL + S3 helpers
+│           └── tests/              # pytest suite (health + S3 + analytics)
+├── data/                           # sample inputs and exports
+└── db/init.sql                     # PostGIS enablement
 ```
 
-## Services and flow
+## TODO
 
-- `docker-compose.yml`
-	- Starts 4 containers for local dev:
-		- `db` = Postgres with PostGIS (spatial database)
-		- `redis` = in-memory cache/queue
-		- `minio` = S3-compatible file storage (with a web console)
-		- `api` = Python FastAPI app, with auto-reload for quick iteration
-
-- `backend/app` (Python package `app`)
-	- `main.py`: minimal web server. Exposes `/health` and `/live` for checks.
-	- `backend/eti/`: ETL scaffold (read/clean/write data). Separate from the web app so batch jobs stay decoupled.
-		- `extract/`: functions that will read raw inputs (CSV/TXT/metadata)
-		- `transform/`: pure data transformations (timestamps, geotagging, features)
-		- `load/`: writers to Parquet, PostGIS, and S3 (planned)
-		- `pipeline.py`: future `run_etl` function to coordinate extract → transform → load
-	- `backend/tests/`: example tests that call the API in-process
-
-- `db/init.sql`
-	- Enables PostGIS in the local database so you can store/query geometry types used in heatmaps.
-
-## Running the stack
-
-```bash
-# Build images and start services in the background
-docker compose up -d --build
-
-# Check API health (FastAPI dev server, port 8000)
-curl http://localhost:8000/health
-
-# Inspect PostGIS installation (optional)
-docker compose exec db psql -U app -d app -c "SELECT PostGIS_Full_Version();"
-
-# Open MinIO console (optional)
-xdg-open http://localhost:9001 || "$BROWSER" http://localhost:9001
-```
-
-How it works:
-- The API container runs `uv run fastapi dev app/main.py --host 0.0.0.0 --port 8000`
-- `./backend` is bind-mounted to `/app` in the container for hot reload while you edit code locally
-- Environment variables for DB/Redis/S3 are injected by compose (and can be overridden via `.env`)
-
-## Tests and quality
-
-```bash
-# Run the test suite inside the API container
-docker compose exec api uv run pytest -q
-
-# Lint, format-check, and type-check (from backend/)
-cd backend
-uv run ruff check .
-uv run mypy .
-uv run pytest -q
-
-# Run pre-commit hooks locally (format, lint, basic checks)
-pre-commit run --all-files
-```
-
-## High-level data flow (planned)
-
-- Extract raw files/metadata from `data/` and external sources
-- Transform/enrich (timestamps, geotagging, features) in `backend/app/backend/eti/transform`
-- Load partitioned Parquet to S3/MinIO and geometries/aggregates to PostGIS
-- Optionally queue jobs/status via Redis
-
-## Upcoming map enhancements
-
-- Cross-spatial occupancy view to visualise overlap across regions.
-- Click-to-drill on a site/hex to fetch and display the underlying records.
-
-## Explanation of each part
-
-HeatmapBat aims to process geospatial time-series at scale and serve aggregated insights. The current structure sets us up for reliability and speed:
-
-### docker-compose.yml (root)
-
-- A single file that starts four containers that work together: the web API, a database (Postgres+PostGIS), a cache/queue (Redis), and file storage (MinIO). This runs the same setup with one command, without installing databases or services.
-
-### backend/Dockerfile
-
-Settings to build the API container (based on Python 3.11) and install Python dependencies with uv. This guarantees the API runs with the same Python and libraries everywhere (dev/CI/prod).
-Testing: `docker compose build api` then start the stack; the API should report healthy at `/health`.
-
-### backend/pyproject.toml
-
-The list of Python packages (FastAPI, Uvicorn, etc.) and tool configs (ruff, mypy, pytest).
-Start the `api` service; it runs `uv sync` to install what's in this file. Lint/type-check/test commands in CI read their settings from here.
-
-### backend/app/main.py (API)
-
-Turns Python functions into URLs you can call. Currently just for health checks but will add functionality later.
- `curl http://localhost:8000/health` should return JSON with `ok: true`.
-
-### backend/app/backend/eti/** (ETL scaffold)
-
-Read raw inputs, transform, and write outputs (to S3/DB/etc.). Seperates processing from the fast web API.
-`backend/app/backend/eti/` with `extract/`, `transform/`, `load/`, and `pipeline.py`.
-
-### backend/app/backend/tests/** (tests)
-
-Automated checks to prove the app behaves as expected.
-
-### db/init.sql (database setup)
-
-A SQL script that enables the PostGIS extension in the local Postgres database. We need geospatial types and functions for heatmaps.
-
-### .env (environment overrides)
-
-A local file where you can override environment variables that compose passes to services. Lets you change credentials/URLs/feature flags without editing the compose file.
-
-### .pre-commit-config.yaml (git hooks)
-
-Rules that run on `git commit` to auto-fix line endings, format/lint code, and reports mistakes (this is literal magic).
-
-### .gitattributes (line endings)
-
-A Git setting file that forces LF line endings in the repo regardless of OS defaults.
-Git diffs shouldn't show random EOL-only changes when switching branches or collaborating.
-
-### .github/workflows/ci.yml (CI pipeline)
-
-Runs in GitHub on every push/PR: installs deps, lints, type-checks, and runs tests.
-
-## Glossary
-
-- FastAPI: A Python web framework for building APIs quickly.  (web server that turns Python functions into HTTP endpoints)
-- Uvicorn: A fast web server (ASGI) that runs the FastAPI app.
-- Pydantic: Validates and serializes data for API.
-- PostGIS: Spatial extension for Postgres that adds geometry types and geospatial functions (heatmaps, distance, etc.).
-- Redis: In‑memory key/value store used for caching and simple queues.
-- MinIO: Local, S3‑compatible object storage. Great for dev; maps to AWS S3 in production.
-- S3 (object storage): Stores files/blobs (like Parquet outputs) rather than rows in a database.
-- ETL: Extract → Transform → Load. Read raw inputs, clean, and write outputs to storage/DB.
-- Docker Compose: One YAML file that starts multiple containers together for local dev.
-- uv: A fast Python package manager/runner used here instead of pip for speed and consistency.
-- pytest: Test runner for Python. Runs your tests and reports results.
-- ruff: Fast linter/formatter for Python code style and simple issues.
-- mypy: Type checker that finds mistakes by validating function signatures and variable types.
+- Advanced occupancy modeling: add hex-bin visualisation and richer heatmaps (e.g., wind direction or other covariates) to improve occupancy inference.
+- Email mko to request longer-term data coverage for modeling.
+- Make hex-bin rendering a first-class option alongside point heatmaps.
+- Cross-spatial occupancy view and click-to-drill remain on deck.

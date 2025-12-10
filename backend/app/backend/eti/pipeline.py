@@ -3,7 +3,7 @@
 Design intent:
 - Provide a single callable to coordinate extract → transform → load steps.
 - Keep I/O (filesystem/S3) and compute (pandas/pyarrow) isolated from the API layer.
-- Make it trivial to schedule later (e.g., with Prefect, cron, or Celery).
+- Make it trivial to schedule later
 """
 
 from pathlib import Path
