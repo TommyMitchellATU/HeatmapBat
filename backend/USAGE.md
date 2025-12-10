@@ -79,6 +79,12 @@ JSON APIs that feed it.
   - `GET /api/heatmap/h3?resolution=7&start=...&end=...` — server-side H3 bins
   - `GET /api/heatmap/h3_parquet?start=YYYY-MM-DD&end=YYYY-MM-DD` — precomputed H3 from Parquet
 
+MinIO mode (S3-compatible):
+- Set `HEATMAP_SOURCE=s3` to fetch both points and hexes from object storage (or override per-endpoint with `HEATMAP_POINTS_SOURCE` / `HEATMAP_H3_SOURCE`).
+- Points: supply a GeoJSON/CSV object key via `points_object` (e.g., `exports/maug_points.geojson`).
+- Hexes: supply a Parquet prefix via `analytics_dir` (e.g., `analytics/h3_daily`).
+- The app will create the bucket on startup if missing and will return `503` if storage is unreachable.
+
 ### 3.1 Run the CLI importer (inside `api` container)
 
 ```bash

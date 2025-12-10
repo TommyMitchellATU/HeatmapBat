@@ -12,14 +12,19 @@ the map consumes. Two flavours of data are exposed:
 * H3‑binned aggregates (for smoother, occupancy‑style visuals).
 """
 
+import json
+import logging
+import os
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import h3
 import pandas as pd
 from fastapi import Depends, FastAPI, Query
+from fastapi import HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -28,8 +33,53 @@ from sqlalchemy.orm import Session
 
 from app.backend.eti.db import get_db
 from app.backend.eti.models import MaugSummarySample
+from app.backend.eti.s3 import ensure_bucket_exists, get_object_bytes, list_keys
 
 app = FastAPI(title="HeatmapBat API", version="0.1.0")
+
+logger = logging.getLogger(__name__)
+
+_CACHE_TTL = timedelta(minutes=5)
+_object_cache: dict[str, tuple[datetime, bytes]] = {}
+
+
+def _get_cached_bytes(key: str) -> Optional[bytes]:
+    now = datetime.now(UTC)
+    entry = _object_cache.get(key)
+    if not entry:
+        return None
+    ts, data = entry
+    if now - ts > _CACHE_TTL:
+        _object_cache.pop(key, None)
+        return None
+    return data
+
+
+def _set_cached_bytes(key: str, data: bytes) -> None:
+    _object_cache[key] = (datetime.now(UTC), data)
+
+
+def _resolve_source(point_var: str, hex_var: str) -> tuple[str, str]:
+    """Resolve points and H3 sources with a shared override flag.
+
+    Precedence: per-endpoint var -> HEATMAP_SOURCE -> defaults (points=db, h3=local).
+    """
+
+    shared = os.environ.get("HEATMAP_SOURCE")
+    points_source = os.environ.get(point_var) or shared or "db"
+    h3_source = os.environ.get(hex_var) or shared or "local"
+    return points_source.lower(), h3_source.lower()
+
+
+@app.on_event("startup")
+def _ensure_bucket_on_startup() -> None:  # pragma: no cover - integration concern
+    points_source, h3_source = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
+    if points_source != "s3" and h3_source != "s3":
+        return
+    try:
+        ensure_bucket_exists()
+    except Exception as exc:
+        logger.warning("Could not ensure S3 bucket exists: %s", exc)
 
 
 class HealthResponse(BaseModel):
@@ -86,6 +136,14 @@ def get_heatmap_points(
             "to the most recent record is included."
         ),
     ),
+    points_object: str = Query(
+        "data/exports/maug_points.geojson",
+        description=(
+            "When HEATMAP_POINTS_SOURCE=s3, the object key to read points "
+            "from. When local, a filesystem path. Supports GeoJSON (.geojson) "
+            "or CSV (.csv)."
+        ),
+    ),
     db: Session = Depends(get_db),
 ) -> List[HeatmapPoint]:
     """Return points for the heatmap, optionally filtered by time range.
@@ -97,6 +155,72 @@ def get_heatmap_points(
     keeping the API stable.
     """
 
+    source, _ = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
+
+    if source == "s3":
+        cached = _get_cached_bytes(points_object)
+        if cached is not None:
+            data = cached
+        else:
+            try:
+                data = get_object_bytes(points_object)
+            except Exception as exc:  # pragma: no cover - network failure path
+                raise HTTPException(status_code=503, detail="Unable to fetch points from object storage") from exc
+            _set_cached_bytes(points_object, data)
+        if points_object.endswith(".geojson"):
+            payload = json.loads(data)
+            features = payload.get("features", [])
+            points: List[HeatmapPoint] = []
+            for feat in features:
+                coords = feat.get("geometry", {}).get("coordinates", [None, None])
+                lon, lat = coords[0], coords[1]
+                props = feat.get("properties", {})
+                ts = props.get("timestamp_utc")
+                if ts is None or lat is None or lon is None:
+                    continue
+                ts_dt = datetime.fromisoformat(ts)
+                if start is not None and ts_dt < start:
+                    continue
+                if end is not None and ts_dt >= end:
+                    continue
+                raw = float(props.get("raw_count") or props.get("files_count") or 1)
+                points.append(
+                    HeatmapPoint(
+                        lat=float(lat),
+                        lon=float(lon),
+                        raw_count=raw,
+                        effort_normalised_weight=raw,
+                        timestamp_utc=ts_dt,
+                    )
+                )
+            return points
+
+        if points_object.endswith(".csv"):
+            df = pd.read_csv(BytesIO(data))
+            if start is not None:
+                df = df[df["timestamp_utc"] >= start.isoformat()]
+            if end is not None:
+                df = df[df["timestamp_utc"] < end.isoformat()]
+            points: List[HeatmapPoint] = []
+            for row in df.to_dict(orient="records"):
+                ts_str = row.get("timestamp_utc")
+                if ts_str is None:
+                    continue
+                ts_dt = datetime.fromisoformat(str(ts_str))
+                raw = float(row.get("raw_count") or row.get("files_count") or 1)
+                points.append(
+                    HeatmapPoint(
+                        lat=float(row["lat"]),
+                        lon=float(row["lon"]),
+                        raw_count=raw,
+                        effort_normalised_weight=raw,
+                        timestamp_utc=ts_dt,
+                    )
+                )
+            return points
+
+        raise HTTPException(status_code=503, detail="Unsupported points object format from object storage")
+
     stmt = select(MaugSummarySample)
     if start is not None:
         stmt = stmt.where(MaugSummarySample.timestamp_utc >= start)
@@ -105,13 +229,7 @@ def get_heatmap_points(
 
     points: List[HeatmapPoint] = []
     for row in db.execute(stmt).scalars():
-        # ``files_count`` is used as a simple proxy for activity. If it is
-        # missing, fall back to 1 so that the point still appears.
         raw_count = float(row.files_count or 1)
-
-        # Placeholder for effort normalisation. Once effort metrics (e.g.
-        # detector hours) are available in the schema, this is the place to
-        # divide ``raw_count`` by effort and return the adjusted weight.
         effort_weight = raw_count
         points.append(
             HeatmapPoint(
@@ -267,63 +385,84 @@ def get_heatmap_h3_parquet(
     analytics_dir: str = Query(
         "data/analytics/h3_daily",
         description=(
-            "Base directory containing partitioned H3 analytics Parquet "
-            "files, typically produced by the ETI transform stage."
+            "Base directory (or S3 prefix when HEATMAP_H3_SOURCE=s3) "
+            "containing partitioned H3 analytics Parquet files."
         ),
     ),
 ) -> List[H3ParquetCell]:
     """Serve H3 aggregates from precomputed Parquet files.
 
-    This endpoint avoids running H3 binning and aggregation against the live
-    database on every request. Instead it assumes that a separate ETI
-    transform has produced daily Parquet files in ``analytics_dir`` with at
-    least the following columns:
-
-    * ``time_bin_start`` – timestamp at the start of the time window,
-    * ``h3_index`` – H3 cell index, and
-    * ``raw_count_sum`` / ``sample_count`` – aggregated metrics.
+    When ``HEATMAP_H3_SOURCE=s3``, Parquet partitions are fetched from the
+    configured S3/MinIO bucket under ``analytics_dir`` as a prefix. Otherwise
+    the local filesystem is used.
     """
 
-    base = Path(analytics_dir)
-    if not base.exists():
+    _, source = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
+
+    def _load_parquet_frames() -> list[pd.DataFrame]:
+        frames: list[pd.DataFrame] = []
+
+        if source == "s3":
+            prefix = analytics_dir.rstrip("/") + "/"
+
+            try:
+                keys = list(list_keys(prefix))
+            except Exception as exc:  # pragma: no cover - network failure path
+                raise HTTPException(status_code=503, detail="Unable to list analytics objects from storage") from exc
+
+            # Discover keys following the naming convention
+            # ``h3_analytics_YYYY-MM-DD.parquet``.
+            for key in keys:
+                name = os.path.basename(key)
+                if not name.startswith("h3_analytics_") or not name.endswith(".parquet"):
+                    continue
+                try:
+                    date_str = name.removeprefix("h3_analytics_").removesuffix(".parquet")
+                    file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except Exception:
+                    continue
+                if start is not None and file_date < start:
+                    continue
+                if end is not None and file_date >= end:
+                    continue
+                cached = _get_cached_bytes(key)
+                if cached is None:
+                    try:
+                        cached = get_object_bytes(key)
+                    except Exception as exc:  # pragma: no cover - network failure path
+                        raise HTTPException(status_code=503, detail="Unable to fetch analytics object from storage") from exc
+                    _set_cached_bytes(key, cached)
+                frames.append(pd.read_parquet(BytesIO(cached)))
+        else:
+            base = Path(analytics_dir)
+            if not base.exists():
+                return []
+
+            parquet_files = sorted(base.glob("h3_analytics_*.parquet"))
+            for path in parquet_files:
+                try:
+                    date_str = path.stem.split("_")[-1]
+                    file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except Exception:
+                    continue
+
+                if start is not None and file_date < start:
+                    continue
+                if end is not None and file_date >= end:
+                    continue
+
+                frames.append(pd.read_parquet(path))
+
+        return frames
+
+    frames = _load_parquet_frames()
+    if not frames:
         return []
-
-    # Discover candidate files matching the naming convention used by the
-    # transform layer: ``h3_analytics_YYYY-MM-DD.parquet``.
-    parquet_files = sorted(base.glob("h3_analytics_*.parquet"))
-    if not parquet_files:
-        return []
-
-    selected: List[Path] = []
-    for path in parquet_files:
-        # Extract the date component from the filename.
-        try:
-            date_str = path.stem.split("_")[-1]
-            file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        except Exception:
-            # Ignore files that do not follow the expected pattern.
-            continue
-
-        if start is not None and file_date < start:
-            continue
-        if end is not None and file_date >= end:
-            continue
-
-        selected.append(path)
-
-    if not selected:
-        return []
-
-    # Read and concatenate all selected Parquet partitions.
-    frames: List[pd.DataFrame] = []
-    for path in selected:
-        frames.append(pd.read_parquet(path))
 
     df = pd.concat(frames, ignore_index=True)
     if df.empty:
         return []
 
-    # Defensive: aggregate again in case multiple partitions overlap.
     grouped = (
         df.groupby("h3_index", dropna=False)
         .agg(
@@ -333,15 +472,11 @@ def get_heatmap_h3_parquet(
         .reset_index()
     )
 
-    # Attach centroids and polygon boundaries server-side so the frontend
-    # does not need H3 math.
     def _centroid(idx: str) -> tuple[float, float]:
-        # v4: returns (lat, lon).
         lat, lon = h3.cell_to_latlng(idx)  # type: ignore[attr-defined]
         return lat, lon
 
     def _polygon(idx: str) -> list[tuple[float, float]]:
-        # v4: returns list of (lat, lon) tuples; convert to (lon, lat).
         boundary = h3.cell_to_boundary(idx)  # type: ignore[attr-defined]
         return [(lon, lat) for lat, lon in boundary]
 

@@ -28,6 +28,7 @@
 - Points endpoint: `GET /api/heatmap/points?start=...&end=...` returns raw points with `raw_count` and `effort_normalised_weight` for the heatmap.
 - Server-side H3 binning: `GET /api/heatmap/h3?resolution=7&start=...&end=...` for aggregated hex buckets (lighter on the client).
 - Parquet-backed H3: `GET /api/heatmap/h3_parquet?start=YYYY-MM-DD&end=YYYY-MM-DD` to serve precomputed analytics from `data/analytics/h3_daily`.
+- MinIO-backed mode: set `HEATMAP_SOURCE=s3` (or `HEATMAP_POINTS_SOURCE` / `HEATMAP_H3_SOURCE` individually) to fetch points/hexes from MinIO; provide object keys via `points_object` and `analytics_dir`.
 
 ## Project structure
 

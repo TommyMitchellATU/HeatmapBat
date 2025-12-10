@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
-from typing import BinaryIO
+from typing import BinaryIO, Iterable, Optional
 
 import boto3
 from botocore.client import Config
+from botocore.exceptions import ClientError
 
 
 def get_s3_client():
@@ -28,6 +29,48 @@ def get_bucket_name() -> str:
     return os.environ.get("S3_BUCKET", "heatmapbat")
 
 
+def ensure_bucket_exists() -> None:
+    """Ensure the target bucket exists; create it if missing.
+
+    Safe to call repeatedly. If the bucket already exists and is owned by the
+    caller, this is a no-op. Intended for MinIO/local dev convenience.
+    """
+
+    client = get_s3_client()
+    bucket = get_bucket_name()
+    try:
+        client.head_bucket(Bucket=bucket)
+        return
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code not in {"404", "NoSuchBucket"}:
+            raise
+
+    client.create_bucket(Bucket=bucket)
+
+
+def list_keys(prefix: str) -> Iterable[str]:
+    """Yield object keys under the given prefix.
+
+    Uses list_objects_v2 pagination to avoid large responses. If the bucket or
+    prefix does not exist, this returns an empty iterator.
+    """
+
+    client = get_s3_client()
+    continuation: Optional[str] = None
+    bucket = get_bucket_name()
+    while True:
+        kwargs = {"Bucket": bucket, "Prefix": prefix}
+        if continuation:
+            kwargs["ContinuationToken"] = continuation
+        resp = client.list_objects_v2(**kwargs)
+        for item in resp.get("Contents", []):
+            yield item["Key"]
+        if not resp.get("IsTruncated"):
+            break
+        continuation = resp.get("NextContinuationToken")
+
+
 def upload_fileobj(obj: BinaryIO, key: str) -> None:
     """Upload a file-like object to S3.
 
@@ -48,3 +91,11 @@ def download_fileobj(key: str, obj: BinaryIO) -> None:
     """
     client = get_s3_client()
     client.download_fileobj(get_bucket_name(), key, obj)
+
+
+def get_object_bytes(key: str) -> bytes:
+    """Fetch an object and return its raw bytes."""
+
+    client = get_s3_client()
+    resp = client.get_object(Bucket=get_bucket_name(), Key=key)
+    return resp["Body"].read()
