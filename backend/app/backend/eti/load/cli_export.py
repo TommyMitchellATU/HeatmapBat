@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Command-line tool for exporting ETI samples to CSV.
 
 This CLI is intended to be run either in the ``api`` container or any
@@ -7,6 +5,8 @@ environment that can reach the Postgres instance described by
 ``DATABASE_URL``. It uses the same database session utilities as the rest of
 ETI.
 """
+
+from __future__ import annotations
 
 import argparse
 from datetime import datetime

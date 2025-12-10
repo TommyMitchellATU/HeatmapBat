@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Export helpers for turning ETI samples into flat files.
 
 This module currently focuses on writing map‑ready CSV files from the
@@ -7,6 +5,8 @@ This module currently focuses on writing map‑ready CSV files from the
 that spreadsheets, GIS tools, or web maps can consume it without any
 additional processing.
 """
+
+from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime

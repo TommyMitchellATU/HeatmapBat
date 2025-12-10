@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """CLI for exporting ETI samples as a GeoJSON FeatureCollection."""
+
+from __future__ import annotations
 
 import argparse
 from datetime import datetime

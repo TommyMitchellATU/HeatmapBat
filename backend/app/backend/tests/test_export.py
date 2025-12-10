@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Integration-style tests for ETI export helpers.
 
 These tests talk to the same Postgres instance used by the application,
@@ -10,6 +8,8 @@ which means they should be run inside the Docker stack (for example via
 They are intentionally lightweight smoke tests rather than exhaustive
 verification.
 """
+
+from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path

@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """GeoJSON export helpers for ETI samples.
 
 These utilities turn rows from ``maug_summary_samples`` into a GeoJSON
 FeatureCollection that can be consumed by web maps or GIS tools without any
 extra transformation.
 """
+
+from __future__ import annotations
 
 import json
 from collections.abc import Iterable
