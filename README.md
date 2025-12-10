@@ -94,6 +94,11 @@ uv run pytest -q
 └── db/init.sql                     # PostGIS enablement
 ```
 
+## Placeholders
+
+- `backend/app/backend/eti/pipeline.py` — stub ETL entrypoint; currently unused by API/CLI.
+- `backend/app/backend/eti/export_to_s3.py` — helper only used if you first create `/data/maug_summary_samples_combined.csv` via manual export.
+
 ## TODO
 
 - Advanced occupancy modeling: add hex-bin visualisation and richer heatmaps (e.g., wind direction or other covariates) to improve occupancy inference.

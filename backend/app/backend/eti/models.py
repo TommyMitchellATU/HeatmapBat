@@ -8,7 +8,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 """SQLAlchemy ORM models for the ETI subsystem.
 
-Right now we only model a single table, ``maug_summary_samples``, which holds
+Only model a single table, ``maug_summary_samples``, which holds
 one row per line from a MAUG ``*_Summary.txt`` file. This is the canonical
 representation that ETL code writes to and that the API and analysis tools
 will read from.
