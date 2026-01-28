@@ -10,7 +10,7 @@
       rel="stylesheet"
     />
     <script src="https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.js"></script>
-    <script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.min.js"></script>
+    <script src="https://unpkg.com/h3-js/dist/h3-js.umd.js"></script>
 
     <style>
       html,
@@ -77,11 +77,127 @@
 
       #map {
         flex: 1;
+        position: relative;
       }
 
       .status {
         font-size: 0.75rem;
         opacity: 0.8;
+      }
+
+      /* Legend */
+      .map-legend {
+        position: absolute;
+        bottom: 30px;
+        left: 10px;
+        background: white;
+        padding: 12px 16px;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        font-size: 12px;
+        z-index: 1000;
+      }
+
+      .map-legend h4 {
+        margin: 0 0 8px 0;
+        font-size: 13px;
+        color: #1e3a5f;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 4px 0;
+      }
+
+      .legend-color {
+        width: 20px;
+        height: 20px;
+        border-radius: 3px;
+        border: 1px solid rgba(0,0,0,0.2);
+      }
+
+      /* Popup styling */
+      .maplibregl-popup {
+        max-width: 320px;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+
+      .popup-content {
+        padding: 0;
+      }
+
+      .popup-header {
+        background: #1e3a5f;
+        color: white;
+        padding: 12px 16px;
+        border-radius: 8px 8px 0 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .popup-header .bat-icon {
+        font-size: 24px;
+      }
+
+      .popup-header h3 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .popup-header .subtitle {
+        font-size: 12px;
+        opacity: 0.8;
+        margin-top: 2px;
+      }
+
+      .popup-body {
+        padding: 16px;
+        background: #f8fafc;
+      }
+
+      .popup-stats {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .popup-stat {
+        text-align: center;
+        padding: 10px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      }
+
+      .popup-stat .value {
+        font-size: 20px;
+        font-weight: 700;
+        color: #1e3a5f;
+      }
+
+      .popup-stat .label {
+        font-size: 11px;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .popup-location {
+        font-size: 12px;
+        color: #475569;
+        background: white;
+        padding: 10px;
+        border-radius: 8px;
+        margin-top: 8px;
+      }
+
+      .popup-location strong {
+        color: #1e3a5f;
       }
     </style>
   </head>
@@ -102,7 +218,52 @@
           <span class="status" id="status"></span>
         </div>
       </header>
-      <div id="map"></div>
+      <div id="map">
+        <div class="map-legend">
+          <h4>🦇 Bat Activity</h4>
+          <div class="legend-item">
+            <div class="legend-color" style="background: #991b1b;"></div>
+            <span>Very High (50,000+)</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background: #ef4444;"></div>
+            <span>High (20,000+)</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background: #f59e0b;"></div>
+            <span>Medium (5,000+)</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background: #22c55e;"></div>
+            <span>Low (1,000+)</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background: #3b82f6;"></div>
+            <span>Minimal (&lt;1,000)</span>
+          </div>
+          <hr style="margin: 8px 0; border: none; border-top: 1px solid #ddd;">
+          <h4 style="margin: 8px 0 4px 0; font-size: 12px;">H3 Grid Layers</h4>
+          <div class="legend-item">
+            <div class="legend-color" style="background: transparent; border: 3px solid #1a1a1a;"></div>
+            <span>Resolution 4 (largest)</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background: transparent; border: 2px solid #404040;"></div>
+            <span>Resolution 5</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background: transparent; border: 1.5px solid #666666;"></div>
+            <span>Resolution 6</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color" style="background: transparent; border: 1px solid #888888;"></div>
+            <span>Resolution 7 (finest)</span>
+          </div>
+          <div class="legend-info" id="resolution-info" style="margin-top: 8px; font-size: 11px; color: #666;">
+            Active: Res <span id="current-res">7</span> | Zoom to see detail
+          </div>
+        </div>
+      </div>
     </div>
 
     <script>
@@ -110,8 +271,15 @@
       const map = new maplibregl.Map({
         container: "map",
         style: "https://demotiles.maplibre.org/style.json", // public demo style
-        center: [-7.0, 54.0], // Roughly Ireland; adjust as needed
-        zoom: 6,
+        center: [-8.0, 53.5], // Center of Ireland
+        zoom: 6.5,
+        minZoom: 5.5,
+        maxZoom: 18,
+        // Restrict view to Ireland and surrounding waters
+        maxBounds: [
+          [-12.0, 51.0], // Southwest corner [lng, lat]
+          [-4.5, 55.5],  // Northeast corner [lng, lat]
+        ],
       });
 
       map.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -120,12 +288,29 @@
       const startInput = document.getElementById("start");
       const endInput = document.getElementById("end");
       const loadBtn = document.getElementById("load");
-      // Single mode: precomputed H3 cells served from the analytics layer.
+      
+      // Store raw data points for re-aggregation at different resolutions
+      let rawDataPoints = [];
+      
+      // Map zoom level to H3 resolution for hierarchical display
+      // Lower zoom = coarser hexagons, higher zoom = finer hexagons
+      function getH3ResolutionForZoom(zoom) {
+        if (zoom < 7) return 4;      // Very zoomed out - large hexes
+        if (zoom < 8) return 5;      // Country view
+        if (zoom < 9) return 6;      // Regional view
+        if (zoom < 10) return 7;     // County view
+        if (zoom < 11) return 8;     // Town view
+        if (zoom < 13) return 9;     // Neighborhood view
+        return 10;                   // Street level - finest detail
+      }
+      
+      // Get current H3 resolution based on zoom
+      function getCurrentResolution() {
+        return getH3ResolutionForZoom(map.getZoom());
+      }
 
       // Utility to build query parameters from the two datetime inputs.
-      // If no dates are provided, this returns an empty string so that the
-      // backend returns all data in the database.
-      function buildQuery() {
+      function buildQuery(resolution) {
         const params = new URLSearchParams();
         if (startInput.value) {
           const d = new Date(startInput.value);
@@ -135,14 +320,15 @@
           const d = new Date(endInput.value);
           params.set("end", d.toISOString().slice(0, 10));
         }
+        params.set("resolution", resolution.toString());
         params.set("analytics_dir", "/data/analytics/h3_daily");
         const qs = params.toString();
         return qs ? `?${qs}` : "";
       }
 
-      async function fetchData() {
-        const qs = buildQuery();
-        statusEl.textContent = "Loading precomputed H3 cells...";
+      async function fetchData(resolution) {
+        const qs = buildQuery(resolution);
+        statusEl.textContent = `Loading H3 cells (resolution ${resolution})...`;
         loadBtn.disabled = true;
         try {
           const path = "/api/heatmap/h3";
@@ -152,19 +338,17 @@
             throw new Error(`HTTP ${resp.status}`);
           }
           const data = await resp.json();
+          
+          // Store raw data for potential client-side re-aggregation
+          rawDataPoints = data;
 
           const totalRaw = data.reduce(
-            (acc, p) => acc + (p.raw_count_sum || 0),
+            (acc, p) => acc + (p.raw_count || p.raw_count_sum || 0),
             0,
           );
-          const totalSamples = data.reduce(
-            (acc, p) => acc + (p.sample_count || 0),
-            0,
-          );
+          const totalSamples = data.length;
 
-          statusEl.textContent = `Loaded ${data.length} H3 cells (raw sum=${totalRaw.toFixed(
-            1,
-          )}, samples=${totalSamples})`;
+          statusEl.textContent = `Loaded ${data.length} H3 cells @ res ${resolution} (total detections: ${totalRaw.toLocaleString()})`;
 
           return data;
         } catch (err) {
@@ -199,6 +383,97 @@
         };
       }
 
+      // Generate H3 hexagon polygons from the data using h3-js
+      function toHexGeoJSON(data, forOverlay = false) {
+        console.log("toHexGeoJSON called with", data.length, "cells, overlay:", forOverlay);
+        
+        const features = [];
+        for (const p of data) {
+          try {
+            // Get the hex boundary from h3-js - returns [[lat, lng], ...] 
+            const boundary = h3.cellToBoundary(p.h3_index);
+            // Convert to GeoJSON format [lng, lat] and close the ring
+            const coords = boundary.map(([lat, lng]) => [lng, lat]);
+            coords.push(coords[0]); // Close the polygon ring
+            
+            features.push({
+              type: "Feature",
+              geometry: {
+                type: "Polygon",
+                coordinates: [coords],
+              },
+              properties: {
+                weight: p.effort_normalised_weight ?? p.raw_count ?? 0,
+                raw_count: p.raw_count ?? 0,
+                effort_normalised_weight: p.effort_normalised_weight ?? 0,
+                h3_index: p.h3_index,
+                resolution: h3.getResolution(p.h3_index),
+                sample_count: 1,
+              },
+            });
+          } catch (err) {
+            console.error("Error processing h3 cell:", p.h3_index, err);
+          }
+        }
+        console.log("Created", features.length, "hex features");
+        return { type: "FeatureCollection", features };
+      }
+      
+      // Aggregate data to a different H3 resolution (coarser)
+      function aggregateToResolution(data, targetResolution) {
+        const buckets = new Map();
+        
+        for (const p of data) {
+          try {
+            const currentRes = h3.getResolution(p.h3_index);
+            let parentIndex;
+            
+            if (currentRes > targetResolution) {
+              // Get parent cell at coarser resolution
+              parentIndex = h3.cellToParent(p.h3_index, targetResolution);
+            } else if (currentRes === targetResolution) {
+              parentIndex = p.h3_index;
+            } else {
+              // Can't aggregate to finer resolution, skip
+              continue;
+            }
+            
+            if (!buckets.has(parentIndex)) {
+              buckets.set(parentIndex, {
+                h3_index: parentIndex,
+                raw_count: 0,
+                effort_normalised_weight: 0,
+                sample_count: 0,
+              });
+            }
+            
+            const bucket = buckets.get(parentIndex);
+            bucket.raw_count += p.raw_count ?? 0;
+            bucket.effort_normalised_weight += p.effort_normalised_weight ?? p.raw_count ?? 0;
+            bucket.sample_count += 1;
+          } catch (err) {
+            console.error("Error aggregating cell:", p.h3_index, err);
+          }
+        }
+        
+        // Convert to array and add lat/lon
+        const aggregated = [];
+        for (const [idx, bucket] of buckets) {
+          try {
+            const [lat, lon] = h3.cellToLatLng(idx);
+            aggregated.push({
+              ...bucket,
+              lat,
+              lon,
+            });
+          } catch (err) {
+            console.error("Error getting centroid for:", idx, err);
+          }
+        }
+        
+        return aggregated;
+      }
+
       function toPolygonGeoJSON(data) {
         return {
           type: "FeatureCollection",
@@ -220,105 +495,227 @@
       }
 
       async function loadHeatmap() {
-        const data = await fetchData();
-        const pointGeojson = toGeoJSON(data);
-
-        const pointSourceId = "heatmap-points";
-        const heatLayerId = "heatmap-layer";
+        // Fetch data at a fine resolution (res 7) so we can aggregate client-side
+        const baseResolution = 7;
+        const data = await fetchData(baseResolution);
+        rawDataPoints = data;
+        
+        // Initial render at current zoom level
+        updateHexagonsForZoom();
+      }
+      
+      // Track current displayed resolution to avoid unnecessary updates
+      let currentDisplayResolution = null;
+      let isUpdating = false;
+      
+      // Update hexagons based on current zoom level
+      function updateHexagonsForZoom() {
+        if (isUpdating || rawDataPoints.length === 0) return;
+        
+        const targetRes = getCurrentResolution();
+        
+        // Skip if we're already showing this resolution
+        if (targetRes === currentDisplayResolution) return;
+        
+        isUpdating = true;
+        currentDisplayResolution = targetRes;
+        
+        console.log(`Updating hexagons to resolution ${targetRes} (zoom: ${map.getZoom().toFixed(1)})`);
+        
+        // Aggregate data to target resolution (client-side for responsiveness)
+        // If target is finer than our data, use original data
+        const dataRes = rawDataPoints.length > 0 && rawDataPoints[0].h3_index 
+          ? h3.getResolution(rawDataPoints[0].h3_index) 
+          : 7;
+        
+        let displayData;
+        if (targetRes <= dataRes) {
+          // Aggregate to coarser resolution
+          displayData = aggregateToResolution(rawDataPoints, targetRes);
+        } else {
+          // Can't get finer than source data, use as-is
+          displayData = rawDataPoints;
+        }
+        
+        renderHexagons(displayData);
+        
+        // Also update overlay with all data (at finest available resolution)
+        renderOverlay(rawDataPoints);
+        
+        statusEl.textContent = `Showing ${displayData.length} hexagons @ res ${targetRes} (zoom: ${map.getZoom().toFixed(1)})`;
+        
+        // Update legend resolution display
+        const resEl = document.getElementById("current-res");
+        if (resEl) resEl.textContent = targetRes;
+        
+        isUpdating = false;
+      }
+      
+      // Render the main colored hexagon layer
+      function renderHexagons(data) {
         const hexSourceId = "heatmap-hexes";
         const hexFillLayerId = "heatmap-hex-fill";
         const hexLineLayerId = "heatmap-hex-outline";
 
-        // Update or create point heatmap source/layer.
-        if (map.getSource(pointSourceId)) {
-          map.getSource(pointSourceId).setData(pointGeojson);
+        // Generate H3 hexagon polygons using h3-js
+        const hexGeojson = toHexGeoJSON(data);
+
+        // Update or create hex polygon source.
+        if (map.getSource(hexSourceId)) {
+          map.getSource(hexSourceId).setData(hexGeojson);
         } else {
-          map.addSource(pointSourceId, { type: "geojson", data: pointGeojson });
+          map.addSource(hexSourceId, { type: "geojson", data: hexGeojson });
+
+          // Color-coded fill based on activity level (more subtle to show grid)
           map.addLayer({
-            id: heatLayerId,
-            type: "heatmap",
-            source: pointSourceId,
-            maxzoom: 15,
+            id: hexFillLayerId,
+            type: "fill",
+            source: hexSourceId,
             paint: {
-              // Increase the heatmap weight based on point weight property.
-              "heatmap-weight": ["interpolate", ["linear"], ["get", "weight"], 0, 0, 10, 1],
-
-              // Increase the heatmap intensity as zoom level increases.
-              "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 15, 3],
-
-              // Color ramp for heatmap.
-              "heatmap-color": [
+              "fill-color": [
                 "interpolate",
                 ["linear"],
-                ["heatmap-density"],
-                0,
-                "rgba(33,102,172,0)",
-                0.2,
-                "rgb(103,169,207)",
-                0.4,
-                "rgb(209,229,240)",
-                0.6,
-                "rgb(253,219,199)",
-                0.8,
-                "rgb(239,138,98)",
-                1,
-                "rgb(178,24,43)",
+                ["get", "raw_count"],
+                0, "#93c5fd",      // Light blue - minimal
+                1000, "#86efac",   // Light green - low
+                5000, "#fcd34d",   // Light orange - medium
+                20000, "#fca5a5",  // Light red - high
+                50000, "#dc2626",  // Red - very high
               ],
-
-              // Adjust the heatmap radius by zoom level.
-              "heatmap-radius": [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                0,
-                2,
-                9,
-                20,
-              ],
-
-              // Transition from heatmap to circle layer by zoom level if
-              // circles are added later; for now keep opacity fixed.
-              "heatmap-opacity": 0.9,
+              "fill-opacity": 0.5,
             },
           });
+
+          // Outline for clearer hex boundaries.
+          map.addLayer({
+            id: hexLineLayerId,
+            type: "line",
+            source: hexSourceId,
+            paint: {
+              "line-color": "#1e3a5f",
+              "line-width": 1.5,
+              "line-opacity": 0.9,
+            },
+          });
+
+          // Make hex cells clickable from anywhere
+          map.on("click", hexFillLayerId, (e) => {
+            if (!e.features.length) return;
+            const props = e.features[0].properties;
+            showPopup(e.lngLat, props);
+          });
+
+          // Change cursor on hover
+          map.on("mouseenter", hexFillLayerId, () => {
+            map.getCanvas().style.cursor = "pointer";
+          });
+          map.on("mouseleave", hexFillLayerId, () => {
+            map.getCanvas().style.cursor = "";
+          });
         }
-
-        if (data.length && data[0].polygon) {
-          const hexGeojson = toPolygonGeoJSON(data);
-
-          // Update or create hex polygon source.
-          if (map.getSource(hexSourceId)) {
-            map.getSource(hexSourceId).setData(hexGeojson);
+      }
+      
+      // Render an overlay showing all hexagons at multiple resolutions (prominent grid)
+      function renderOverlay(data) {
+        // Create multi-resolution hex grid overlay like a classic H3 visualization
+        // We'll show 3 resolution levels: coarse (res 4), medium (res 5), and fine (res 7)
+        
+        const resolutions = [
+          { res: 4, sourceId: "hex-grid-res4", layerId: "hex-grid-lines-res4", lineWidth: 3, color: "#1a1a1a", opacity: 0.8 },
+          { res: 5, sourceId: "hex-grid-res5", layerId: "hex-grid-lines-res5", lineWidth: 2, color: "#404040", opacity: 0.6 },
+          { res: 6, sourceId: "hex-grid-res6", layerId: "hex-grid-lines-res6", lineWidth: 1.2, color: "#666666", opacity: 0.5 },
+          { res: 7, sourceId: "hex-grid-res7", layerId: "hex-grid-lines-res7", lineWidth: 0.8, color: "#888888", opacity: 0.4 },
+        ];
+        
+        for (const { res, sourceId, layerId, lineWidth, color, opacity } of resolutions) {
+          // Aggregate data to this resolution
+          const aggregatedData = aggregateToResolution(data, res);
+          const gridGeojson = toHexGeoJSON(aggregatedData, true);
+          
+          if (map.getSource(sourceId)) {
+            map.getSource(sourceId).setData(gridGeojson);
           } else {
-            map.addSource(hexSourceId, { type: "geojson", data: hexGeojson });
-
-            // Semi-transparent fill to show cell extent.
+            map.addSource(sourceId, { type: "geojson", data: gridGeojson });
+            
+            // Add grid lines for this resolution
             map.addLayer({
-              id: hexFillLayerId,
-              type: "fill",
-              source: hexSourceId,
-              paint: {
-                "fill-color": "#3b82f6",
-                "fill-opacity": 0.15,
-              },
-            });
-
-            // Outline for clearer hex boundaries.
-            map.addLayer({
-              id: hexLineLayerId,
+              id: layerId,
               type: "line",
-              source: hexSourceId,
+              source: sourceId,
               paint: {
-                "line-color": "#1d4ed8",
-                "line-width": 1.0,
-                "line-opacity": 0.8,
+                "line-color": color,
+                "line-width": lineWidth,
+                "line-opacity": opacity,
               },
             });
           }
         }
       }
 
+      // Create and show popup with bat detection info
+      function showPopup(lngLat, props) {
+        const rawCount = props.raw_count ?? props.raw_count_sum ?? 0;
+        const sampleCount = props.sample_count ?? 1;
+        const h3Index = props.h3_index ?? "Unknown";
+        const resolution = props.resolution ?? (h3Index !== "Unknown" ? h3.getResolution(h3Index) : "?");
+        const weight = props.effort_normalised_weight ?? props.weight ?? rawCount;
+
+        // Calculate activity level
+        let activityLevel = "Low";
+        let activityColor = "#22c55e";
+        if (rawCount > 100) {
+          activityLevel = "High";
+          activityColor = "#ef4444";
+        } else if (rawCount > 30) {
+          activityLevel = "Medium";
+          activityColor = "#f59e0b";
+        }
+
+        const html = `
+          <div class="popup-content">
+            <div class="popup-header">
+              <span class="bat-icon">🦇</span>
+              <div>
+                <h3>Bat Activity Zone</h3>
+                <div class="subtitle">H3 Resolution ${resolution}</div>
+              </div>
+            </div>
+            <div class="popup-body">
+              <div class="popup-stats">
+                <div class="popup-stat">
+                  <div class="value">${rawCount.toLocaleString()}</div>
+                  <div class="label">Detections</div>
+                </div>
+                <div class="popup-stat">
+                  <div class="value">${sampleCount.toLocaleString()}</div>
+                  <div class="label">Samples</div>
+                </div>
+                <div class="popup-stat">
+                  <div class="value" style="color: ${activityColor}">${activityLevel}</div>
+                  <div class="label">Activity</div>
+                </div>
+                <div class="popup-stat">
+                  <div class="value">${(rawCount / Math.max(sampleCount, 1)).toFixed(1)}</div>
+                  <div class="label">Avg/Sample</div>
+                </div>
+              </div>
+              <div class="popup-location">
+                <strong>Location:</strong> ${lngLat.lat.toFixed(4)}°N, ${Math.abs(lngLat.lng).toFixed(4)}°W<br>
+                <strong>H3 Cell:</strong> ${h3Index.slice(0, 15)}...<br>
+                <strong>Resolution:</strong> ${resolution} (zoom in for finer detail)
+              </div>
+            </div>
+          </div>
+        `;
+
+        new maplibregl.Popup({ closeButton: true, maxWidth: "320px" })
+          .setLngLat(lngLat)
+          .setHTML(html)
+          .addTo(map);
+      }
+
       loadBtn.addEventListener("click", () => {
+        currentDisplayResolution = null; // Force refresh
         loadHeatmap();
       });
 
@@ -326,6 +723,15 @@
       // without any explicit time filter.
       map.on("load", () => {
         loadHeatmap();
+        
+        // Update hexagons when zoom changes (with debounce for performance)
+        let zoomTimeout;
+        map.on("zoomend", () => {
+          clearTimeout(zoomTimeout);
+          zoomTimeout = setTimeout(() => {
+            updateHexagonsForZoom();
+          }, 150);
+        });
       });
     </script>
   </body>
