@@ -241,36 +241,41 @@
             <div class="legend-color" style="background: #3b82f6;"></div>
             <span>Minimal (&lt;1,000)</span>
           </div>
-          <hr style="margin: 8px 0; border: none; border-top: 1px solid #ddd;">
-          <h4 style="margin: 8px 0 4px 0; font-size: 12px;">H3 Grid Layers</h4>
-          <div class="legend-item">
-            <div class="legend-color" style="background: transparent; border: 3px solid #1a1a1a;"></div>
-            <span>Resolution 4 (largest)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background: transparent; border: 2px solid #404040;"></div>
-            <span>Resolution 5</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background: transparent; border: 1.5px solid #666666;"></div>
-            <span>Resolution 6</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background: transparent; border: 1px solid #888888;"></div>
-            <span>Resolution 7 (finest)</span>
-          </div>
           <div class="legend-info" id="resolution-info" style="margin-top: 8px; font-size: 11px; color: #666;">
-            Active: Res <span id="current-res">7</span> | Zoom to see detail
+            Data shown at Res <span id="current-res">7</span>
           </div>
         </div>
       </div>
     </div>
 
     <script>
-      // Basic MapLibre initialisation.
+      // Basic MapLibre initialisation with a simple style that won't cover our hex grid
       const map = new maplibregl.Map({
         container: "map",
-        style: "https://demotiles.maplibre.org/style.json", // public demo style
+        style: {
+          version: 8,
+          sources: {
+            "osm-tiles": {
+              type: "raster",
+              tiles: [
+                "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+              ],
+              tileSize: 256,
+              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+            },
+          },
+          layers: [
+            {
+              id: "osm-tiles-layer",
+              type: "raster",
+              source: "osm-tiles",
+              minzoom: 0,
+              maxzoom: 19,
+            },
+          ],
+        },
         center: [-8.0, 53.5], // Center of Ireland
         zoom: 6.5,
         minZoom: 5.5,
@@ -385,14 +390,13 @@
 
       // Generate H3 hexagon polygons from the data using h3-js
       function toHexGeoJSON(data, forOverlay = false) {
-        console.log("toHexGeoJSON called with", data.length, "cells, overlay:", forOverlay);
-        
         const features = [];
         for (const p of data) {
           try {
-            // Get the hex boundary from h3-js - returns [[lat, lng], ...] 
+            // Get the hex boundary from h3-js
             const boundary = h3.cellToBoundary(p.h3_index);
-            // Convert to GeoJSON format [lng, lat] and close the ring
+            
+            // h3-js cellToBoundary returns [[lat, lng], ...] - swap to [lng, lat] for GeoJSON
             const coords = boundary.map(([lat, lng]) => [lng, lat]);
             coords.push(coords[0]); // Close the polygon ring
             
@@ -415,7 +419,6 @@
             console.error("Error processing h3 cell:", p.h3_index, err);
           }
         }
-        console.log("Created", features.length, "hex features");
         return { type: "FeatureCollection", features };
       }
       
@@ -520,8 +523,6 @@
         isUpdating = true;
         currentDisplayResolution = targetRes;
         
-        console.log(`Updating hexagons to resolution ${targetRes} (zoom: ${map.getZoom().toFixed(1)})`);
-        
         // Aggregate data to target resolution (client-side for responsiveness)
         // If target is finer than our data, use original data
         const dataRes = rawDataPoints.length > 0 && rawDataPoints[0].h3_index 
@@ -538,9 +539,6 @@
         }
         
         renderHexagons(displayData);
-        
-        // Also update overlay with all data (at finest available resolution)
-        renderOverlay(rawDataPoints);
         
         statusEl.textContent = `Showing ${displayData.length} hexagons @ res ${targetRes} (zoom: ${map.getZoom().toFixed(1)})`;
         
@@ -614,43 +612,6 @@
           });
         }
       }
-      
-      // Render an overlay showing all hexagons at multiple resolutions (prominent grid)
-      function renderOverlay(data) {
-        // Create multi-resolution hex grid overlay like a classic H3 visualization
-        // We'll show 3 resolution levels: coarse (res 4), medium (res 5), and fine (res 7)
-        
-        const resolutions = [
-          { res: 4, sourceId: "hex-grid-res4", layerId: "hex-grid-lines-res4", lineWidth: 3, color: "#1a1a1a", opacity: 0.8 },
-          { res: 5, sourceId: "hex-grid-res5", layerId: "hex-grid-lines-res5", lineWidth: 2, color: "#404040", opacity: 0.6 },
-          { res: 6, sourceId: "hex-grid-res6", layerId: "hex-grid-lines-res6", lineWidth: 1.2, color: "#666666", opacity: 0.5 },
-          { res: 7, sourceId: "hex-grid-res7", layerId: "hex-grid-lines-res7", lineWidth: 0.8, color: "#888888", opacity: 0.4 },
-        ];
-        
-        for (const { res, sourceId, layerId, lineWidth, color, opacity } of resolutions) {
-          // Aggregate data to this resolution
-          const aggregatedData = aggregateToResolution(data, res);
-          const gridGeojson = toHexGeoJSON(aggregatedData, true);
-          
-          if (map.getSource(sourceId)) {
-            map.getSource(sourceId).setData(gridGeojson);
-          } else {
-            map.addSource(sourceId, { type: "geojson", data: gridGeojson });
-            
-            // Add grid lines for this resolution
-            map.addLayer({
-              id: layerId,
-              type: "line",
-              source: sourceId,
-              paint: {
-                "line-color": color,
-                "line-width": lineWidth,
-                "line-opacity": opacity,
-              },
-            });
-          }
-        }
-      }
 
       // Create and show popup with bat detection info
       function showPopup(lngLat, props) {
@@ -720,17 +681,15 @@
       });
 
       // Once the map style has loaded, fetch and render an initial heatmap
-      // without any explicit time filter.
       map.on("load", () => {
+        // Load the data
         loadHeatmap();
         
-        // Update hexagons when zoom changes (with debounce for performance)
+        // Update hexagon resolution when zoom changes
         let zoomTimeout;
         map.on("zoomend", () => {
           clearTimeout(zoomTimeout);
-          zoomTimeout = setTimeout(() => {
-            updateHexagonsForZoom();
-          }, 150);
+          zoomTimeout = setTimeout(() => updateHexagonsForZoom(), 150);
         });
       });
     </script>
