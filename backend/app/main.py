@@ -518,6 +518,67 @@ def get_heatmap_h3_parquet(
     return cells
 
 
+class TimelineDateEntry(BaseModel):
+    """A single date entry for the timeline."""
+
+    date: date
+    sample_count: int
+    total_detections: int
+
+
+class TimelineResponse(BaseModel):
+    """Response model for the timeline dates endpoint."""
+
+    dates: List[TimelineDateEntry]
+    min_date: Optional[date]
+    max_date: Optional[date]
+
+
+@app.get("/api/timeline/dates", response_model=TimelineResponse, tags=["timeline"])
+def get_timeline_dates(
+    db: Session = Depends(get_db),
+) -> TimelineResponse:
+    """Return available dates with sample counts for the timeline.
+
+    This endpoint provides the data needed to populate the timeline slider,
+    including per-day sample counts which can be visualized as an activity
+    sparkline.
+    """
+    from sqlalchemy import cast, Date, func
+
+    stmt = (
+        select(
+            cast(MaugSummarySample.timestamp_utc, Date).label("date"),
+            func.count().label("sample_count"),
+            func.coalesce(func.sum(MaugSummarySample.files_count), 0).label(
+                "total_detections"
+            ),
+        )
+        .group_by(cast(MaugSummarySample.timestamp_utc, Date))
+        .order_by(cast(MaugSummarySample.timestamp_utc, Date))
+    )
+
+    results = db.execute(stmt).all()
+
+    if not results:
+        return TimelineResponse(dates=[], min_date=None, max_date=None)
+
+    dates = [
+        TimelineDateEntry(
+            date=row.date,
+            sample_count=row.sample_count,
+            total_detections=row.total_detections,
+        )
+        for row in results
+    ]
+
+    return TimelineResponse(
+        dates=dates,
+        min_date=dates[0].date,
+        max_date=dates[-1].date,
+    )
+
+
 @app.get("/", response_class=HTMLResponse, tags=["ui"])
 def index() -> Any:
     """Serve the main web UI shell.

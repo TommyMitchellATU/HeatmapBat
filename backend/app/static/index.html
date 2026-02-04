@@ -118,6 +118,216 @@
         border: 1px solid rgba(0,0,0,0.2);
       }
 
+      /* Timeline container */
+      .timeline-container {
+        background: #111827;
+        padding: 12px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-top: 1px solid #374151;
+      }
+
+      .timeline-controls {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .timeline-btn {
+        background: #374151;
+        border: none;
+        color: #f9fafb;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        transition: background 0.2s;
+      }
+
+      .timeline-btn:hover {
+        background: #4b5563;
+      }
+
+      .timeline-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      .timeline-btn.play-btn {
+        background: #10b981;
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
+      }
+
+      .timeline-btn.play-btn:hover {
+        background: #059669;
+      }
+
+      .timeline-btn.play-btn.playing {
+        background: #ef4444;
+      }
+
+      .timeline-btn.play-btn.playing:hover {
+        background: #dc2626;
+      }
+
+      .speed-selector {
+        background: #374151;
+        color: #f9fafb;
+        border: none;
+        padding: 6px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .timeline-info {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        min-width: 180px;
+      }
+
+      .timeline-date {
+        font-size: 16px;
+        font-weight: 600;
+        color: #f9fafb;
+      }
+
+      .timeline-range {
+        font-size: 11px;
+        color: #9ca3af;
+      }
+
+      .timeline-mode-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: auto;
+      }
+
+      .mode-label {
+        color: #9ca3af;
+        font-size: 12px;
+      }
+
+      .toggle-switch {
+        position: relative;
+        width: 50px;
+        height: 24px;
+        background: #374151;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+
+      .toggle-switch.active {
+        background: #10b981;
+      }
+
+      .toggle-switch::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 20px;
+        height: 20px;
+        background: #f9fafb;
+        border-radius: 50%;
+        transition: transform 0.3s;
+      }
+
+      .toggle-switch.active::after {
+        transform: translateX(26px);
+      }
+
+      /* Timeline slider and sparkline */
+      .timeline-track {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .sparkline-container {
+        height: 40px;
+        display: flex;
+        align-items: flex-end;
+        gap: 1px;
+        padding: 0 2px;
+      }
+
+      .sparkline-bar {
+        flex: 1;
+        min-width: 2px;
+        background: #3b82f6;
+        opacity: 0.5;
+        border-radius: 2px 2px 0 0;
+        transition: opacity 0.2s, background 0.2s;
+        cursor: pointer;
+      }
+
+      .sparkline-bar:hover {
+        opacity: 1;
+        background: #60a5fa;
+      }
+
+      .sparkline-bar.active {
+        opacity: 1;
+        background: #10b981;
+      }
+
+      .sparkline-bar.in-range {
+        opacity: 0.8;
+        background: #22d3ee;
+      }
+
+      .timeline-slider {
+        width: 100%;
+        height: 6px;
+        -webkit-appearance: none;
+        appearance: none;
+        background: #374151;
+        border-radius: 3px;
+        outline: none;
+        cursor: pointer;
+      }
+
+      .timeline-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        background: #10b981;
+        border-radius: 50%;
+        cursor: pointer;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      }
+
+      .timeline-slider::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        background: #10b981;
+        border-radius: 50%;
+        cursor: pointer;
+        border: none;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+      }
+
+      .timeline-labels {
+        display: flex;
+        justify-content: space-between;
+        color: #9ca3af;
+        font-size: 10px;
+        padding: 0 2px;
+      }
+
       /* Popup styling */
       .maplibregl-popup {
         max-width: 320px;
@@ -204,17 +414,8 @@
   <body>
     <div id="app">
       <header>
-        <h1>HeatmapBat – Activity Heatmap</h1>
+        <h1>🦇 HeatmapBat – Activity Heatmap</h1>
         <div class="controls">
-          <label>
-            Start
-            <input id="start" type="datetime-local" />
-          </label>
-          <label>
-            End
-            <input id="end" type="datetime-local" />
-          </label>
-          <button id="load">Load</button>
           <span class="status" id="status"></span>
         </div>
       </header>
@@ -246,10 +447,58 @@
           </div>
         </div>
       </div>
+
+      <!-- Timeline Controls -->
+      <div class="timeline-container">
+        <div class="timeline-controls">
+          <button class="timeline-btn" id="btn-start" title="Go to start">⏮</button>
+          <button class="timeline-btn" id="btn-prev" title="Previous day">◀</button>
+          <button class="timeline-btn play-btn" id="btn-play" title="Play/Pause">▶</button>
+          <button class="timeline-btn" id="btn-next" title="Next day">▶</button>
+          <button class="timeline-btn" id="btn-end" title="Go to end">⏭</button>
+          
+          <select class="speed-selector" id="speed-selector" title="Playback speed">
+            <option value="2000">0.5x</option>
+            <option value="1000" selected>1x</option>
+            <option value="500">2x</option>
+            <option value="250">4x</option>
+          </select>
+
+          <div class="timeline-info">
+            <div class="timeline-date" id="current-date">Loading...</div>
+            <div class="timeline-range" id="date-range">—</div>
+          </div>
+
+          <div class="timeline-mode-toggle">
+            <span class="mode-label">Cumulative</span>
+            <div class="toggle-switch" id="cumulative-toggle" title="Toggle cumulative mode"></div>
+          </div>
+        </div>
+
+        <div class="timeline-track">
+          <div class="sparkline-container" id="sparkline"></div>
+          <input type="range" class="timeline-slider" id="timeline-slider" min="0" max="100" value="0" />
+          <div class="timeline-labels">
+            <span id="label-start">—</span>
+            <span id="label-end">—</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script>
-      // Basic MapLibre initialisation with a simple style that won't cover our hex grid
+      // ===== TIMELINE STATE =====
+      let timelineData = [];        // Array of {date, sample_count, total_detections}
+      let currentDateIndex = 0;     // Current position in timeline
+      let isPlaying = false;        // Playback state
+      let playInterval = null;      // Interval ID for playback
+      let playSpeed = 1000;         // ms between frames
+      let isCumulative = false;     // Show data up to date vs just that date
+      
+      // Cache for fetched data by date
+      const dataCache = new Map();
+
+      // ===== MAP INITIALIZATION =====
       const map = new maplibregl.Map({
         container: "map",
         style: {
@@ -276,153 +525,249 @@
             },
           ],
         },
-        center: [-8.0, 53.5], // Center of Ireland
+        center: [-8.0, 53.5],
         zoom: 6.5,
         minZoom: 5.5,
         maxZoom: 18,
-        // Restrict view to Ireland and surrounding waters
         maxBounds: [
-          [-12.0, 51.0], // Southwest corner [lng, lat]
-          [-4.5, 55.5],  // Northeast corner [lng, lat]
+          [-12.0, 51.0],
+          [-4.5, 55.5],
         ],
       });
 
       map.addControl(new maplibregl.NavigationControl(), "top-right");
 
+      // ===== DOM ELEMENTS =====
       const statusEl = document.getElementById("status");
-      const startInput = document.getElementById("start");
-      const endInput = document.getElementById("end");
-      const loadBtn = document.getElementById("load");
-      
-      // Store raw data points for re-aggregation at different resolutions
+      const slider = document.getElementById("timeline-slider");
+      const currentDateEl = document.getElementById("current-date");
+      const dateRangeEl = document.getElementById("date-range");
+      const labelStart = document.getElementById("label-start");
+      const labelEnd = document.getElementById("label-end");
+      const sparklineEl = document.getElementById("sparkline");
+      const btnPlay = document.getElementById("btn-play");
+      const btnStart = document.getElementById("btn-start");
+      const btnEnd = document.getElementById("btn-end");
+      const btnPrev = document.getElementById("btn-prev");
+      const btnNext = document.getElementById("btn-next");
+      const speedSelector = document.getElementById("speed-selector");
+      const cumulativeToggle = document.getElementById("cumulative-toggle");
+
+      // Store raw data points for re-aggregation
       let rawDataPoints = [];
-      
-      // Map zoom level to H3 resolution for hierarchical display
-      // Lower zoom = coarser hexagons, higher zoom = finer hexagons
+      let currentDisplayResolution = null;
+      let isUpdating = false;
+
+      // ===== H3 RESOLUTION MAPPING =====
       function getH3ResolutionForZoom(zoom) {
-        if (zoom < 7) return 4;      // Very zoomed out - large hexes
-        if (zoom < 8) return 5;      // Country view
-        if (zoom < 9) return 6;      // Regional view
-        if (zoom < 10) return 7;     // County view
-        if (zoom < 11) return 8;     // Town view
-        if (zoom < 13) return 9;     // Neighborhood view
-        return 10;                   // Street level - finest detail
+        if (zoom < 7) return 4;
+        if (zoom < 8) return 5;
+        if (zoom < 9) return 6;
+        if (zoom < 10) return 7;
+        if (zoom < 11) return 8;
+        if (zoom < 13) return 9;
+        return 10;
       }
-      
-      // Get current H3 resolution based on zoom
+
       function getCurrentResolution() {
         return getH3ResolutionForZoom(map.getZoom());
       }
 
-      // Utility to build query parameters from the two datetime inputs.
-      function buildQuery(resolution) {
-        const params = new URLSearchParams();
-        if (startInput.value) {
-          const d = new Date(startInput.value);
-          params.set("start", d.toISOString().slice(0, 10)); // date-only
-        }
-        if (endInput.value) {
-          const d = new Date(endInput.value);
-          params.set("end", d.toISOString().slice(0, 10));
-        }
-        params.set("resolution", resolution.toString());
-        params.set("analytics_dir", "/data/analytics/h3_daily");
-        const qs = params.toString();
-        return qs ? `?${qs}` : "";
-      }
-
-      async function fetchData(resolution) {
-        const qs = buildQuery(resolution);
-        statusEl.textContent = `Loading H3 cells (resolution ${resolution})...`;
-        loadBtn.disabled = true;
+      // ===== TIMELINE INITIALIZATION =====
+      async function initTimeline() {
+        statusEl.textContent = "Loading timeline data...";
         try {
-          const path = "/api/heatmap/h3";
-
-          const resp = await fetch(`${path}${qs}`);
-          if (!resp.ok) {
-            throw new Error(`HTTP ${resp.status}`);
-          }
+          const resp = await fetch("/api/timeline/dates");
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
           
-          // Store raw data for potential client-side re-aggregation
-          rawDataPoints = data;
+          timelineData = data.dates;
+          
+          if (timelineData.length === 0) {
+            statusEl.textContent = "No data available";
+            return;
+          }
 
-          const totalRaw = data.reduce(
-            (acc, p) => acc + (p.raw_count || p.raw_count_sum || 0),
-            0,
-          );
-          const totalSamples = data.length;
+          // Setup slider
+          slider.min = 0;
+          slider.max = timelineData.length - 1;
+          slider.value = 0;
 
-          statusEl.textContent = `Loaded ${data.length} H3 cells @ res ${resolution} (total detections: ${totalRaw.toLocaleString()})`;
+          // Setup labels
+          labelStart.textContent = formatDate(timelineData[0].date);
+          labelEnd.textContent = formatDate(timelineData[timelineData.length - 1].date);
+          dateRangeEl.textContent = `${timelineData.length} days of data`;
 
+          // Build sparkline
+          buildSparkline();
+
+          // Load initial data
+          await goToDate(0);
+          
+        } catch (err) {
+          console.error("Failed to load timeline:", err);
+          statusEl.textContent = "Failed to load timeline data";
+        }
+      }
+
+      function formatDate(dateStr) {
+        const d = new Date(dateStr);
+        return d.toLocaleDateString('en-GB', { 
+          day: 'numeric', 
+          month: 'short', 
+          year: 'numeric' 
+        });
+      }
+
+      function formatDateShort(dateStr) {
+        const d = new Date(dateStr);
+        return d.toLocaleDateString('en-GB', { 
+          day: 'numeric', 
+          month: 'short'
+        });
+      }
+
+      // ===== SPARKLINE =====
+      function buildSparkline() {
+        sparklineEl.innerHTML = '';
+        
+        // Find max for scaling
+        const maxDetections = Math.max(...timelineData.map(d => d.total_detections), 1);
+        
+        timelineData.forEach((entry, index) => {
+          const bar = document.createElement('div');
+          bar.className = 'sparkline-bar';
+          const height = Math.max(4, (entry.total_detections / maxDetections) * 100);
+          bar.style.height = `${height}%`;
+          bar.title = `${formatDate(entry.date)}: ${entry.total_detections.toLocaleString()} detections`;
+          bar.dataset.index = index;
+          
+          bar.addEventListener('click', () => {
+            goToDate(index);
+          });
+          
+          sparklineEl.appendChild(bar);
+        });
+        
+        updateSparklineHighlight();
+      }
+
+      function updateSparklineHighlight() {
+        const bars = sparklineEl.querySelectorAll('.sparkline-bar');
+        bars.forEach((bar, index) => {
+          bar.classList.remove('active', 'in-range');
+          if (index === currentDateIndex) {
+            bar.classList.add('active');
+          } else if (isCumulative && index < currentDateIndex) {
+            bar.classList.add('in-range');
+          }
+        });
+      }
+
+      // ===== DATA FETCHING =====
+      async function fetchDataForDate(dateStr, endDateStr = null) {
+        const cacheKey = endDateStr ? `${dateStr}_${endDateStr}` : dateStr;
+        
+        if (dataCache.has(cacheKey)) {
+          return dataCache.get(cacheKey);
+        }
+
+        const params = new URLSearchParams();
+        params.set("start", dateStr);
+        
+        if (endDateStr) {
+          params.set("end", endDateStr);
+        } else {
+          // Add one day to get just this date
+          const nextDay = new Date(dateStr);
+          nextDay.setDate(nextDay.getDate() + 1);
+          params.set("end", nextDay.toISOString().slice(0, 10));
+        }
+        
+        params.set("resolution", "7");
+
+        try {
+          const resp = await fetch(`/api/heatmap/h3?${params.toString()}`);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          
+          dataCache.set(cacheKey, data);
           return data;
         } catch (err) {
-          console.error(err);
-          statusEl.textContent = "Failed to load H3 cells";
+          console.error("Failed to fetch data:", err);
           return [];
-        } finally {
-          loadBtn.disabled = false;
         }
       }
 
-      // Convert the H3 parquet API response into a GeoJSON FeatureCollection
-      // that MapLibre can consume directly as a source. Each feature
-      // represents a single aggregated H3 cell.
-      function toGeoJSON(data) {
-        return {
-          type: "FeatureCollection",
-          features: data.map((p) => ({
-            type: "Feature",
-            geometry: {
-              type: "Point",
-              coordinates: [p.lon, p.lat],
-            },
-            properties: {
-              // Use effort_normalised_weight (or raw_count) as heatmap weight.
-              weight: p.effort_normalised_weight ?? p.raw_count ?? 0,
-              raw_count: p.raw_count ?? 0,
-              effort_normalised_weight: p.effort_normalised_weight ?? 0,
-              h3_index: p.h3_index,
-            },
-          })),
-        };
+      // ===== DATE NAVIGATION =====
+      async function goToDate(index) {
+        if (index < 0 || index >= timelineData.length) return;
+        
+        currentDateIndex = index;
+        slider.value = index;
+        
+        const entry = timelineData[index];
+        currentDateEl.textContent = formatDate(entry.date);
+        
+        updateSparklineHighlight();
+        
+        // Fetch and display data
+        statusEl.textContent = "Loading...";
+        
+        let data;
+        if (isCumulative && index > 0) {
+          // Fetch from start to current date
+          const startDate = timelineData[0].date;
+          const endDate = new Date(entry.date);
+          endDate.setDate(endDate.getDate() + 1);
+          data = await fetchDataForDate(startDate, endDate.toISOString().slice(0, 10));
+        } else {
+          data = await fetchDataForDate(entry.date);
+        }
+        
+        rawDataPoints = data;
+        currentDisplayResolution = null; // Force re-render
+        updateHexagonsForZoom();
+        
+        const totalDetections = data.reduce((acc, p) => acc + (p.raw_count || 0), 0);
+        statusEl.textContent = `${formatDateShort(entry.date)}: ${data.length} cells, ${totalDetections.toLocaleString()} detections`;
       }
 
-      // Generate H3 hexagon polygons from the data using h3-js
-      function toHexGeoJSON(data, forOverlay = false) {
-        const features = [];
-        for (const p of data) {
-          try {
-            // Get the hex boundary from h3-js
-            const boundary = h3.cellToBoundary(p.h3_index);
-            
-            // h3-js cellToBoundary returns [[lat, lng], ...] - swap to [lng, lat] for GeoJSON
-            const coords = boundary.map(([lat, lng]) => [lng, lat]);
-            coords.push(coords[0]); // Close the polygon ring
-            
-            features.push({
-              type: "Feature",
-              geometry: {
-                type: "Polygon",
-                coordinates: [coords],
-              },
-              properties: {
-                weight: p.effort_normalised_weight ?? p.raw_count ?? 0,
-                raw_count: p.raw_count ?? 0,
-                effort_normalised_weight: p.effort_normalised_weight ?? 0,
-                h3_index: p.h3_index,
-                resolution: h3.getResolution(p.h3_index),
-                sample_count: 1,
-              },
-            });
-          } catch (err) {
-            console.error("Error processing h3 cell:", p.h3_index, err);
+      // ===== PLAYBACK CONTROLS =====
+      function play() {
+        if (isPlaying) {
+          pause();
+          return;
+        }
+        
+        isPlaying = true;
+        btnPlay.textContent = '⏸';
+        btnPlay.classList.add('playing');
+        btnPlay.title = 'Pause';
+        
+        playInterval = setInterval(() => {
+          if (currentDateIndex < timelineData.length - 1) {
+            goToDate(currentDateIndex + 1);
+          } else {
+            // Loop back to start
+            goToDate(0);
           }
-        }
-        return { type: "FeatureCollection", features };
+        }, playSpeed);
       }
-      
-      // Aggregate data to a different H3 resolution (coarser)
+
+      function pause() {
+        isPlaying = false;
+        btnPlay.textContent = '▶';
+        btnPlay.classList.remove('playing');
+        btnPlay.title = 'Play';
+        
+        if (playInterval) {
+          clearInterval(playInterval);
+          playInterval = null;
+        }
+      }
+
+      // ===== HEXAGON RENDERING =====
       function aggregateToResolution(data, targetResolution) {
         const buckets = new Map();
         
@@ -432,12 +777,10 @@
             let parentIndex;
             
             if (currentRes > targetResolution) {
-              // Get parent cell at coarser resolution
               parentIndex = h3.cellToParent(p.h3_index, targetResolution);
             } else if (currentRes === targetResolution) {
               parentIndex = p.h3_index;
             } else {
-              // Can't aggregate to finer resolution, skip
               continue;
             }
             
@@ -459,112 +802,86 @@
           }
         }
         
-        // Convert to array and add lat/lon
         const aggregated = [];
         for (const [idx, bucket] of buckets) {
           try {
             const [lat, lon] = h3.cellToLatLng(idx);
-            aggregated.push({
-              ...bucket,
-              lat,
-              lon,
-            });
+            aggregated.push({ ...bucket, lat, lon });
           } catch (err) {
-            console.error("Error getting centroid for:", idx, err);
+            console.error("Error getting centroid:", idx, err);
           }
         }
         
         return aggregated;
       }
 
-      function toPolygonGeoJSON(data) {
-        return {
-          type: "FeatureCollection",
-          features: data.map((p) => ({
-            type: "Feature",
-            geometry: {
-              type: "Polygon",
-              // Single ring polygon; backend already provides [lon, lat] pairs.
-              coordinates: [p.polygon],
-            },
-            properties: {
-              weight: p.raw_count_sum,
-              raw_count_sum: p.raw_count_sum,
-              sample_count: p.sample_count,
-              h3_index: p.h3_index,
-            },
-          })),
-        };
+      function toHexGeoJSON(data) {
+        const features = [];
+        for (const p of data) {
+          try {
+            const boundary = h3.cellToBoundary(p.h3_index);
+            const coords = boundary.map(([lat, lng]) => [lng, lat]);
+            coords.push(coords[0]);
+            
+            features.push({
+              type: "Feature",
+              geometry: { type: "Polygon", coordinates: [coords] },
+              properties: {
+                weight: p.effort_normalised_weight ?? p.raw_count ?? 0,
+                raw_count: p.raw_count ?? 0,
+                effort_normalised_weight: p.effort_normalised_weight ?? 0,
+                h3_index: p.h3_index,
+                resolution: h3.getResolution(p.h3_index),
+                sample_count: p.sample_count || 1,
+              },
+            });
+          } catch (err) {
+            console.error("Error processing h3 cell:", p.h3_index, err);
+          }
+        }
+        return { type: "FeatureCollection", features };
       }
 
-      async function loadHeatmap() {
-        // Fetch data at a fine resolution (res 7) so we can aggregate client-side
-        const baseResolution = 7;
-        const data = await fetchData(baseResolution);
-        rawDataPoints = data;
-        
-        // Initial render at current zoom level
-        updateHexagonsForZoom();
-      }
-      
-      // Track current displayed resolution to avoid unnecessary updates
-      let currentDisplayResolution = null;
-      let isUpdating = false;
-      
-      // Update hexagons based on current zoom level
       function updateHexagonsForZoom() {
         if (isUpdating || rawDataPoints.length === 0) return;
         
         const targetRes = getCurrentResolution();
-        
-        // Skip if we're already showing this resolution
         if (targetRes === currentDisplayResolution) return;
         
         isUpdating = true;
         currentDisplayResolution = targetRes;
         
-        // Aggregate data to target resolution (client-side for responsiveness)
-        // If target is finer than our data, use original data
         const dataRes = rawDataPoints.length > 0 && rawDataPoints[0].h3_index 
           ? h3.getResolution(rawDataPoints[0].h3_index) 
           : 7;
         
         let displayData;
         if (targetRes <= dataRes) {
-          // Aggregate to coarser resolution
           displayData = aggregateToResolution(rawDataPoints, targetRes);
         } else {
-          // Can't get finer than source data, use as-is
           displayData = rawDataPoints;
         }
         
         renderHexagons(displayData);
         
-        statusEl.textContent = `Showing ${displayData.length} hexagons @ res ${targetRes} (zoom: ${map.getZoom().toFixed(1)})`;
-        
-        // Update legend resolution display
         const resEl = document.getElementById("current-res");
         if (resEl) resEl.textContent = targetRes;
         
         isUpdating = false;
       }
-      
-      // Render the main colored hexagon layer
+
       function renderHexagons(data) {
         const hexSourceId = "heatmap-hexes";
         const hexFillLayerId = "heatmap-hex-fill";
         const hexLineLayerId = "heatmap-hex-outline";
 
-        // Generate H3 hexagon polygons using h3-js
         const hexGeojson = toHexGeoJSON(data);
 
-        // Update or create hex polygon source.
         if (map.getSource(hexSourceId)) {
           map.getSource(hexSourceId).setData(hexGeojson);
         } else {
           map.addSource(hexSourceId, { type: "geojson", data: hexGeojson });
 
-          // Color-coded fill based on activity level (more subtle to show grid)
           map.addLayer({
             id: hexFillLayerId,
             type: "fill",
@@ -574,17 +891,16 @@
                 "interpolate",
                 ["linear"],
                 ["get", "raw_count"],
-                0, "#93c5fd",      // Light blue - minimal
-                1000, "#86efac",   // Light green - low
-                5000, "#fcd34d",   // Light orange - medium
-                20000, "#fca5a5",  // Light red - high
-                50000, "#dc2626",  // Red - very high
+                0, "#93c5fd",
+                1000, "#86efac",
+                5000, "#fcd34d",
+                20000, "#fca5a5",
+                50000, "#dc2626",
               ],
-              "fill-opacity": 0.5,
+              "fill-opacity": 0.6,
             },
           });
 
-          // Outline for clearer hex boundaries.
           map.addLayer({
             id: hexLineLayerId,
             type: "line",
@@ -596,14 +912,12 @@
             },
           });
 
-          // Make hex cells clickable from anywhere
           map.on("click", hexFillLayerId, (e) => {
             if (!e.features.length) return;
             const props = e.features[0].properties;
             showPopup(e.lngLat, props);
           });
 
-          // Change cursor on hover
           map.on("mouseenter", hexFillLayerId, () => {
             map.getCanvas().style.cursor = "pointer";
           });
@@ -613,15 +927,12 @@
         }
       }
 
-      // Create and show popup with bat detection info
       function showPopup(lngLat, props) {
-        const rawCount = props.raw_count ?? props.raw_count_sum ?? 0;
+        const rawCount = props.raw_count ?? 0;
         const sampleCount = props.sample_count ?? 1;
         const h3Index = props.h3_index ?? "Unknown";
-        const resolution = props.resolution ?? (h3Index !== "Unknown" ? h3.getResolution(h3Index) : "?");
-        const weight = props.effort_normalised_weight ?? props.weight ?? rawCount;
+        const resolution = props.resolution ?? "?";
 
-        // Calculate activity level
         let activityLevel = "Low";
         let activityColor = "#22c55e";
         if (rawCount > 100) {
@@ -663,7 +974,7 @@
               <div class="popup-location">
                 <strong>Location:</strong> ${lngLat.lat.toFixed(4)}°N, ${Math.abs(lngLat.lng).toFixed(4)}°W<br>
                 <strong>H3 Cell:</strong> ${h3Index.slice(0, 15)}...<br>
-                <strong>Resolution:</strong> ${resolution} (zoom in for finer detail)
+                <strong>Resolution:</strong> ${resolution}
               </div>
             </div>
           </div>
@@ -675,17 +986,53 @@
           .addTo(map);
       }
 
-      loadBtn.addEventListener("click", () => {
-        currentDisplayResolution = null; // Force refresh
-        loadHeatmap();
+      // ===== EVENT LISTENERS =====
+      btnPlay.addEventListener("click", play);
+      
+      btnStart.addEventListener("click", () => {
+        pause();
+        goToDate(0);
+      });
+      
+      btnEnd.addEventListener("click", () => {
+        pause();
+        goToDate(timelineData.length - 1);
+      });
+      
+      btnPrev.addEventListener("click", () => {
+        pause();
+        if (currentDateIndex > 0) goToDate(currentDateIndex - 1);
+      });
+      
+      btnNext.addEventListener("click", () => {
+        pause();
+        if (currentDateIndex < timelineData.length - 1) goToDate(currentDateIndex + 1);
+      });
+      
+      slider.addEventListener("input", (e) => {
+        pause();
+        goToDate(parseInt(e.target.value));
+      });
+      
+      speedSelector.addEventListener("change", (e) => {
+        playSpeed = parseInt(e.target.value);
+        if (isPlaying) {
+          pause();
+          play();
+        }
+      });
+      
+      cumulativeToggle.addEventListener("click", () => {
+        isCumulative = !isCumulative;
+        cumulativeToggle.classList.toggle("active", isCumulative);
+        dataCache.clear(); // Clear cache as we need different queries
+        goToDate(currentDateIndex);
       });
 
-      // Once the map style has loaded, fetch and render an initial heatmap
+      // ===== INITIALIZATION =====
       map.on("load", () => {
-        // Load the data
-        loadHeatmap();
+        initTimeline();
         
-        // Update hexagon resolution when zoom changes
         let zoomTimeout;
         map.on("zoomend", () => {
           clearTimeout(zoomTimeout);
