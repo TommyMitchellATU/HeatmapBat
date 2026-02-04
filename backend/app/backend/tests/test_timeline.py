@@ -1,11 +1,33 @@
-"""Tests for the timeline API endpoint."""
+"""Tests for the timeline API endpoint.
 
+These tests require a database connection and will be skipped in CI when
+running outside Docker Compose (where the 'db' hostname is not resolvable).
+"""
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 
 
 client = TestClient(app)
+
+
+def _db_available() -> bool:
+    """Check if the database is reachable."""
+    try:
+        response = client.get("/api/timeline/dates")
+        # If we get a response (even an error), the endpoint was reached
+        return response.status_code != 500 or "OperationalError" not in response.text
+    except Exception:
+        return False
+
+
+# Skip all tests in this module if DB is not available
+pytestmark = pytest.mark.skipif(
+    not _db_available(),
+    reason="Database not available (run inside Docker Compose)",
+)
 
 
 def test_timeline_dates_endpoint_exists():
