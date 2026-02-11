@@ -121,3 +121,5 @@ docker compose exec api uv run python -m app.backend.eti.pipeline /data /data/an
 
 # Skip import (reuse existing DB data)
 docker compose exec api uv run python -m app.backend.eti.pipeline /data /data/analytics --skip-import
+
+docker compose exec api uv run python -m app.backend.eti.upload_all_to_s3
