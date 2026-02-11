@@ -10,11 +10,9 @@ from sqlalchemy.orm import Session
 from app.backend.eti.models import MaugSummarySample
 
 
-""" Todo allow multiple diffrerent file formats
+"""Helpers for parsing bat detector ``*_Summary.txt`` files into ORM objects.
 
-Helpers for parsing MAUG ``*_Summary.txt`` files into ORM objects.
-
-The MAUG summary files are CSV‑like text files with columns such as DATE, TIME,
+The detector summary files are CSV-like text files with columns such as DATE, TIME,
 LAT, LON, NS, EW, POWER(V), TEMP(C), and others. This module is responsible
 for:
 
@@ -45,7 +43,7 @@ def parse_lat_lon(
 def parse_timestamp(date_str: str, time_str: str) -> datetime:
     """Combine separate DATE/TIME fields into a single ``datetime``.
 
-    The MAUG export uses an abbreviated month name, for example::
+    The detector export uses an abbreviated month name, for example::
 
         DATE = "2024-May-16"
         TIME = "20:55:59"
@@ -59,13 +57,13 @@ def parse_timestamp(date_str: str, time_str: str) -> datetime:
 
 
 def _derive_site_id_from_filename(source_path: Path) -> Optional[str]:
-    """Derive a site identifier from a MAUG summary filename.
+    """Derive a site identifier from a detector summary filename.
 
-    You have renamed exported summary files so that the *site* appears at the
-    very front of the filename, for example::
+    The exported summary files have the *site* at the front of the filename,
+    for example::
 
-        D04-MAUG-3992_A_Summary.txt
-        D01-MAUG-0031_A_Summary.txt
+        D04-BAT-3992_A_Summary.txt
+        D01-BAT-0031_A_Summary.txt
         D02A-GANN-4098_B_Summary.txt
 
     This helper relies only on that convention and does not care about the
@@ -74,7 +72,7 @@ def _derive_site_id_from_filename(source_path: Path) -> Optional[str]:
     ``"D02A"`` respectively.
     """
 
-    stem = source_path.stem  # e.g. "D04-MAUG-3992_A_Summary"
+    stem = source_path.stem  # e.g. "D04-BAT-3992_A_Summary"
 
     # The site id is the first chunk before the first "-".
     first = stem.split("-", 1)[0].strip()
@@ -133,7 +131,7 @@ def _parse_rows(
 
 
 def parse_summary_file(path: Path) -> List[MaugSummarySample]:
-    """Parse a MAUG summary file from the local filesystem."""
+    """Parse a detector summary file from the local filesystem."""
 
     with path.open("r", newline="") as f:
         reader = csv.DictReader(f)
@@ -148,7 +146,7 @@ def load_summary_file(db: Session, path: Path) -> int:
     db:
         An active SQLAlchemy :class:`Session` bound to the target database.
     path:
-        Filesystem path to the MAUG ``*_Summary.txt`` file to be imported.
+        Filesystem path to the detector ``*_Summary.txt`` file to be imported.
 
     Returns
     -------

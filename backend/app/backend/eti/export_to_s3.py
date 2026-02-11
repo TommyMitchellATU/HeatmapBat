@@ -19,7 +19,7 @@ def upload_csv(path: Path, key: str) -> None:
 
 
 def main() -> None:
-    """Entry point: upload the combined MAUG summary CSV to S3."""
+    """Entry point: upload the combined detector summary CSV to S3."""
     # CSV is expected in the repo root's data/ directory, mounted at /data
     # inside the container (see docker-compose bind mount).
     csv_path = Path("/data/maug_summary_samples_combined.csv")

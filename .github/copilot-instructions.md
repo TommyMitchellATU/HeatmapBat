@@ -5,14 +5,14 @@ These notes help AI agents be immediately productive in this repo by capturing a
 ## Big picture
 - **Purpose**: Geospatial occupancy playground for bat detection data; MapLibre-powered heatmap UI consuming flexible data sources (DB/local/S3).
 - **Orchestration**: `docker-compose.yml` runs PostGIS, Redis, MinIO (S3-compatible), and FastAPI backend with hot-reload (`./backend:/app` bind mount).
-- **Data flow**: MAUG summary files → `MaugSummarySample` table → heatmap APIs (raw points + H3 aggregates). Data can be served from PostGIS, local files, or S3 (MinIO) based on env flags.
+- **Data flow**: Detector summary files → `MaugSummarySample` table → heatmap APIs (raw points + H3 aggregates). Data can be served from PostGIS, local files, or S3 (MinIO) based on env flags.
 - **Key architecture decision**: Single-file FastAPI app (`backend/app/main.py`) with all routes inline; ETL modules under `backend/app/backend/eti/` are standalone and not yet integrated into the API.
 
 ## Repo layout
 - `backend/app/main.py` — FastAPI app, heatmap routes, static file serving, and data-source resolution logic (~535 lines).
 - `backend/app/backend/eti/` — ETL modules: `models.py` (SQLAlchemy ORM for `maug_summary_samples`), `db.py` (session factory), `s3.py` (MinIO/S3 client wrappers), `pipeline.py` (placeholder orchestration).
 - `backend/app/backend/tests/` — pytest suite: health checks, S3 mode tests, analytics endpoints. Tests use `fastapi.testclient` and `monkeypatch` for env flags.
-- `data/` — Sample MAUG summary files, exports (CSV/GeoJSON), and analytics (H3 Parquet partitioned by date under `analytics/h3_daily/YYYY/MM/DD/`).
+- `data/` — Sample bat detector summary files, exports (CSV/GeoJSON), and analytics (H3 Parquet partitioned by date under `analytics/h3_daily/YYYY/MM/DD/`).
 - `.github/workflows/ci.yml` — Two jobs: 1) lint/type/unit tests (uv sync + ruff + mypy + pytest in `backend/` working directory), 2) compose integration (docker stack + health check + in-container pytest).
 
 ## Run the stack (dev)

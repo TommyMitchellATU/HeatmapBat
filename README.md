@@ -1,107 +1,172 @@
 ## HeatmapBat
 
-Geospatial occupancy playground: FastAPI backend, MapLibre UI, and optional MinIO/S3-backed heatmap data. Points and H3 hex bins can come from either the database/local files or object storage with caching and simple feature flags.
+Interactive bat activity heatmap for Ireland. FastAPI backend serves bat detector summary data as H3 hexagon aggregates; a MapLibre-based UI provides timeline playback, zoom-adaptive hex resolution, and per-cell drill-down. Data can be sourced from PostGIS, local files, or S3/MinIO.
+
+## Features
+
+- **Interactive Map**: MapLibre GL map centered on Ireland with H3 hexagon visualization
+- **Timeline Playback**: Day-by-day animation with sparkline activity graph, play/pause, speed controls
+- **Cumulative Mode**: Toggle between single-day view and cumulative data up to selected date
+- **Zoom-Adaptive Resolution**: H3 resolution adjusts automatically (res 4–10) as you zoom in/out
+- **Click Details**: Popup showing detection counts, samples, and location info per hexagon
+- **Flexible Data Sources**: Read from PostGIS, local filesystem, or MinIO/S3 with environment flags
 
 ## Stack
 
-- `docker-compose.yml` brings up PostGIS, Redis, MinIO, and the FastAPI app with hot reload.
-- `backend/app/main.py` serves the web UI and heatmap APIs (`/api/heatmap/*`, `/health`, `/live`).
-- `backend/app/backend/eti/` holds ETL code and S3 helpers (list/get/ensure bucket).
-- `backend/app/backend/tests/` covers the API, S3 modes, and analytics endpoints.
-- `.env` overrides compose env (including heatmap source flags) without editing YAML.
+| Service | Port | Purpose |
+|---------|------|---------|
+| FastAPI | 8000 | API + static UI |
+| PostGIS | 5432 | Sample storage (compose-internal) |
+| MinIO S3 | 9000 | Object storage API |
+| MinIO Console | 9001 | Web UI for S3 (minioadmin/minioadmin) |
+| Redis | 6379 | Reserved for caching (not yet wired) |
 
-**Ports**
-
-- API (FastAPI + static UI): `8000`
-- MinIO S3 endpoint: `9000`
-- MinIO console (web UI): `9001`
-- Postgres/PostGIS: `5432` (compose-only; use `docker compose exec db ...`)
-- Redis: `6379` (compose-only; internal cache/queue)
-
-## Run the app (local dev)
+## Quick Start
 
 ```bash
-# From repo root
+# Start all services
 docker compose up -d --build
 
-# Health check and UI
+# Verify
 curl http://localhost:8000/health
-open http://localhost:8000/ || xdg-open http://localhost:8000/ || "$BROWSER" http://localhost:8000/
+
+# Open UI
+"$BROWSER" http://localhost:8000/
 ```
 
-- The API runs `uv run fastapi dev app/main.py` and reloads on code changes.
-- Compose injects DB/Redis/S3 endpoints; bind mounts `./backend` and `./data` into the container.
-- MinIO console: http://localhost:9001 (minioadmin/minioadmin).
+The API runs with hot-reload; edit files in `backend/` and changes apply immediately.
 
-## Data modes and feature flags
+## Data Pipeline
 
-- Defaults: points from PostGIS (`db`), H3 Parquet from local filesystem (`data/analytics/h3_daily`).
-- Shared toggle: `HEATMAP_SOURCE=s3` switches both points and H3 reads to MinIO/S3.
-- Per-endpoint overrides: `HEATMAP_POINTS_SOURCE` and `HEATMAP_H3_SOURCE` (`db`/`local`/`s3`).
-- Object keys/paths: `points_object` query param (default `data/exports/maug_points.geojson`); `analytics_dir` query param (default `data/analytics/h3_daily`).
-- Caching: in-memory 5-minute TTL for S3 objects; bucket auto-created at startup when S3 mode is enabled.
+### Full Pipeline (Recommended)
 
-## Uploading data to MinIO
-
-- Bucket: `heatmapbat` (auto-ensured on API startup). Access via the MinIO console at http://localhost:9001.
-- Points: upload a GeoJSON or CSV to `data/exports/maug_points.geojson` (or another key you pass via `points_object`).
-- H3 analytics: upload date-partitioned Parquet under `data/analytics/h3_daily/<YYYY>/<MM>/<DD>/...` (prefix overridable via `analytics_dir`).
-- If you prefer CLI, set `AWS_ACCESS_KEY_ID=minioadmin`, `AWS_SECRET_ACCESS_KEY=minioadmin`, and `AWS_ENDPOINT_URL=http://localhost:9000`, then use `aws s3 cp` or `aws s3 sync` against bucket `heatmapbat`.
-
-## API quick reference
-
-- `GET /health`, `GET /live`: lightweight probes.
-- `GET /api/heatmap/points?start&end&points_object=`
-  - Sources from PostGIS or S3/local GeoJSON/CSV based on flags.
-  - Returns `lat`, `lon`, `raw_count`, `effort_normalised_weight`, `timestamp_utc`.
-- `GET /api/heatmap/h3?start&end&resolution=`
-  - Server-side binning via H3 using PostGIS-backed samples.
-- `GET /api/heatmap/h3_parquet?start&end&analytics_dir=`
-  - Reads precomputed H3 Parquet locally or from MinIO/S3 (honors `HEATMAP_H3_SOURCE`).
-
-## Tests and quality
+Run the complete ETL in one command — imports files, generates H3 analytics, and optionally exports:
 
 ```bash
-# All tests (inside container)
+# Import + H3 analytics
+docker compose exec api uv run python -m app.backend.eti.pipeline /data /data/analytics
+
+# With exports
+docker compose exec api uv run python -m app.backend.eti.pipeline /data /data/analytics --csv --geojson
+
+# Skip import (use existing DB data)
+docker compose exec api uv run python -m app.backend.eti.pipeline /data /data/analytics --skip-import
+
+# Date-filtered
+docker compose exec api uv run python -m app.backend.eti.pipeline /data /data/analytics \
+  --start 2024-05-16 --end 2024-05-17 --resolution 7
+```
+
+### Individual Steps
+
+For finer control, run each step separately:
+
+**1. Import Detector Summary Files**
+
+```bash
+# Single file
+docker compose exec api uv run python -m app.backend.eti.cli_import /data/D01-BAT-1397_A_Summary.txt
+```
+
+**2. Generate H3 Analytics**
+
+```bash
+docker compose exec api uv run python -m app.backend.eti.transform.cli_h3_analytics \
+  --start "2024-05-16" --end "2024-05-17" --resolution 7 /data/analytics/h3_daily
+```
+
+**3. Export Data**
+
+```bash
+# CSV export
+docker compose exec api uv run python -m app.backend.eti.load.cli_export \
+  --start "2024-05-16" --end "2024-05-17" /data/exports/maug_points_2024-05-16.csv
+
+# GeoJSON export
+docker compose exec api uv run python -m app.backend.eti.load.cli_geojson_export \
+  --start "2024-05-16" --end "2024-05-17" /data/exports/maug_points.geojson
+```
+
+## API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health`, `GET /live` | Health/liveness probes |
+| `GET /api/timeline/dates` | Available dates with per-day sample counts (drives timeline UI) |
+| `GET /api/heatmap/points?start&end` | Raw sample points (lat, lon, timestamp, raw_count) |
+| `GET /api/heatmap/h3?start&end&resolution=7` | Server-side H3 aggregation from DB |
+| `GET /api/heatmap/h3_parquet?start&end` | Pre-computed H3 Parquet files |
+| `GET /` | MapLibre web UI |
+
+## Data Source Flags
+
+Control where endpoints read data via environment variables:
+
+| Variable | Values | Default |
+|----------|--------|---------|
+| `HEATMAP_SOURCE` | `db`, `local`, `s3` | — (shared fallback) |
+| `HEATMAP_POINTS_SOURCE` | `db`, `local`, `s3` | `db` |
+| `HEATMAP_H3_SOURCE` | `db`, `local`, `s3` | `local` |
+
+Set in `.env` at repo root or pass directly to compose. When `s3` is active, objects are cached in-memory for 5 minutes.
+
+## MinIO / S3 Usage
+
+Bucket `heatmapbat` is auto-created on startup when S3 mode is enabled.
+
+```bash
+# Upload via AWS CLI
+export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin
+aws --endpoint-url http://localhost:9000 s3 cp data/exports/maug_points.geojson s3://heatmapbat/data/exports/
+
+# Or use MinIO console at http://localhost:9001
+```
+
+## Tests and Quality
+
+```bash
+# All tests in container (matches CI)
 docker compose exec api uv run pytest -q
 
-# Focused S3 tests
-docker compose exec api uv run pytest -q app/backend/tests/test_heatmap_points_s3.py app/backend/tests/test_h3_parquet_s3.py app/backend/tests/test_heatmap_minio_shared_flag.py
-
-# Lint/type-check (from backend/)
+# Local dev (from backend/)
 cd backend
+uv sync --dev
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy .
 uv run pytest -q
 ```
 
-## Repo layout (trimmed)
+CI runs two jobs: lint/type/unit tests, and full Docker Compose integration.
+
+## Repo Layout
 
 ```
 .
-├── docker-compose.yml
+├── docker-compose.yml          # PostGIS, Redis, MinIO, FastAPI
 ├── backend/
 │   ├── Dockerfile
-│   ├── pyproject.toml
-│   ├── pytest.ini
-│   ├── USAGE.md
+│   ├── pyproject.toml          # Dependencies (uv)
 │   └── app/
-│       ├── main.py
+│       ├── main.py             # FastAPI app with all routes
+│       ├── static/index.html   # MapLibre UI (timeline, hexagons)
 │       └── backend/
-│           ├── eti/                # ETL + S3 helpers
-│           └── tests/              # pytest suite (health + S3 + analytics)
-├── data/                           # sample inputs and exports
-└── db/init.sql                     # PostGIS enablement
+│           ├── eti/
+│           │   ├── db.py                 # SQLAlchemy session factory
+│           │   ├── models.py             # MaugSummarySample ORM model
+│           │   ├── s3.py                 # MinIO/S3 client helpers
+│           │   ├── cli_import.py         # CLI: import summary files
+│           │   ├── extract/              # Detector summary file parser
+│           │   ├── transform/            # H3 analytics generation
+│           │   └── load/                 # CSV/GeoJSON export CLIs
+│           └── tests/                    # pytest suite
+├── data/
+│   ├── D*_Summary.txt          # Sample bat detector files
+│   ├── exports/                # CSV/GeoJSON outputs
+│   └── analytics/h3_daily/     # Pre-computed H3 Parquet
+└── db/init.sql                 # PostGIS + table schema
 ```
 
-## Placeholders
+## Limited Use Files
 
-- `backend/app/backend/eti/pipeline.py` — stub ETL entrypoint; currently unused by API/CLI.
-- `backend/app/backend/eti/export_to_s3.py` — helper only used if you first create `/data/maug_summary_samples_combined.csv` via manual export.
-
-## TODO
-
-- Advanced occupancy modeling: add hex-bin visualisation and richer heatmaps (e.g., wind direction or other covariates) to improve occupancy inference.
-- Email mko to request longer-term data coverage for modeling.
-- Make hex-bin rendering a first-class option alongside point heatmaps.
-- Cross-spatial occupancy view and click-to-drill remain on deck.
+- `backend/app/backend/eti/export_to_s3.py` — Manual upload helper (requires pre-existing CSV; prefer using the pipeline with `--csv` then uploading via MinIO console or AWS CLI)

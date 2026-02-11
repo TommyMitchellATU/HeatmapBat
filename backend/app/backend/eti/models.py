@@ -9,7 +9,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 """SQLAlchemy ORM models for the ETI subsystem.
 
 Only model a single table, ``maug_summary_samples``, which holds
-one row per line from a MAUG ``*_Summary.txt`` file. This is the canonical
+one row per line from a detector ``*_Summary.txt`` file. This is the canonical
 representation that ETL code writes to and that the API and analysis tools
 will read from.
 """
@@ -20,7 +20,7 @@ class Base(DeclarativeBase):
 
 
 class MaugSummarySample(Base):
-    """Sample row imported from a MAUG ``*_Summary.txt`` file.
+    """Sample row imported from a bat detector ``*_Summary.txt`` file.
 
     The table stores both parsed, typed fields (e.g. ``lat``, ``lon``,
     ``timestamp_utc``) and some of the original string values (``raw_date``,
@@ -34,8 +34,8 @@ class MaugSummarySample(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     # Identifier for the recording site / detector location.
-    # This is parsed from the MAUG summary filename (e.g. "D01" from
-    # "D01 - MAUG - 0031" or similar patterns) so that downstream analyses
+    # This is parsed from the detector summary filename (e.g. "D01" from
+    # "D01-BAT-0031" or similar patterns) so that downstream analyses
     # can group samples by site without needing to know the original folder
     # layout.
     site_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)

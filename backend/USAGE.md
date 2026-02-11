@@ -36,10 +36,10 @@ curl http://localhost:8000/health
 
 ---
 
-## ETI: import MAUG summaries
+## ETI: import detector summaries
 - Import one file (inside `api` container):
 ```bash
-docker compose exec api uv run python -m app.backend.eti.cli_import /data/MAUG-1397_A_Summary.txt
+docker compose exec api uv run python -m app.backend.eti.cli_import /data/D01-BAT-1397_A_Summary.txt
 ```
 - Import all `*_Summary.txt` in `data/`:
 ```bash
@@ -115,3 +115,9 @@ finally:
 ## Tests
 - In container: `docker compose exec api uv run pytest -q`
 - Locally from `backend/`: `uv run pytest -q`
+
+# Full pipeline
+docker compose exec api uv run python -m app.backend.eti.pipeline /data /data/analytics --csv --geojson
+
+# Skip import (reuse existing DB data)
+docker compose exec api uv run python -m app.backend.eti.pipeline /data /data/analytics --skip-import
