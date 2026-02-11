@@ -12,7 +12,6 @@ Usage:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from app.backend.eti.s3 import ensure_bucket_exists, upload_fileobj, get_bucket_name
