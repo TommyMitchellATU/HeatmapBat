@@ -82,7 +82,9 @@ def run_etl(
     if not skip_import:
         summary_files = list(input_dir.glob("*_Summary.txt"))
         if summary_files:
-            logger.info("Importing %d summary files from %s", len(summary_files), input_dir)
+            logger.info(
+                "Importing %d summary files from %s", len(summary_files), input_dir
+            )
             db = SessionLocal()
             try:
                 for path in summary_files:
@@ -95,7 +97,11 @@ def run_etl(
                         logger.warning("  Failed to import %s: %s", path.name, exc)
             finally:
                 db.close()
-            logger.info("Import complete: %d files, %d total rows", files_imported, rows_imported)
+            logger.info(
+                "Import complete: %d files, %d total rows",
+                files_imported,
+                rows_imported,
+            )
         else:
             logger.info("No *_Summary.txt files found in %s", input_dir)
 
@@ -103,7 +109,9 @@ def run_etl(
     if not skip_h3:
         h3_output = output_dir / "h3_daily"
         h3_output.mkdir(parents=True, exist_ok=True)
-        logger.info("Generating H3 analytics (resolution=%d) → %s", h3_resolution, h3_output)
+        logger.info(
+            "Generating H3 analytics (resolution=%d) → %s", h3_resolution, h3_output
+        )
 
         config = H3AnalyticsConfig(resolution=h3_resolution, time_freq="1D")
         run_h3_analytics(start=start, end=end, output_dir=h3_output, config=config)
@@ -125,7 +133,9 @@ def run_etl(
 
             if export_geojson:
                 geojson_path = exports_dir / "maug_points.geojson"
-                count = export_samples_to_geojson(db, geojson_path, start=start, end=end)
+                count = export_samples_to_geojson(
+                    db, geojson_path, start=start, end=end
+                )
                 logger.info("Exported %d features to %s", count, geojson_path)
         finally:
             db.close()
@@ -147,7 +157,9 @@ def _parse_dt(value: str | None) -> datetime | None:
             return datetime.strptime(value, fmt)
         except ValueError:
             continue
-    raise SystemExit(f"Could not parse datetime '{value}'. Use YYYY-MM-DD or ISO format.")
+    raise SystemExit(
+        f"Could not parse datetime '{value}'. Use YYYY-MM-DD or ISO format."
+    )
 
 
 def main() -> None:
@@ -173,10 +185,14 @@ def main() -> None:
     )
     parser.add_argument("--start", type=str, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, help="End date (YYYY-MM-DD)")
-    parser.add_argument("--resolution", type=int, default=7, help="H3 resolution (default: 7)")
+    parser.add_argument(
+        "--resolution", type=int, default=7, help="H3 resolution (default: 7)"
+    )
     parser.add_argument("--csv", action="store_true", help="Also export to CSV")
     parser.add_argument("--geojson", action="store_true", help="Also export to GeoJSON")
-    parser.add_argument("--skip-import", action="store_true", help="Skip file import step")
+    parser.add_argument(
+        "--skip-import", action="store_true", help="Skip file import step"
+    )
     parser.add_argument("--skip-h3", action="store_true", help="Skip H3 analytics step")
 
     args = parser.parse_args()

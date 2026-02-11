@@ -144,12 +144,12 @@ def _set_cached_bytes(key: str, data: bytes) -> None:
 
 def _resolve_source(point_var: str, hex_var: str) -> tuple[str, str]:
     """Determine data sources for points and H3 endpoints.
-    
+
     Resolution order (first non-empty wins):
       1. Per-endpoint env var (HEATMAP_POINTS_SOURCE or HEATMAP_H3_SOURCE)
       2. Shared env var (HEATMAP_SOURCE)
       3. Defaults: points="db", h3="local"
-    
+
     Returns:
         Tuple of (points_source, h3_source), each one of "db", "local", "s3"
     """
@@ -162,6 +162,7 @@ def _resolve_source(point_var: str, hex_var: str) -> tuple[str, str]:
 # STARTUP EVENT
 # When the server starts, ensure the S3 bucket exists (if S3 mode is enabled).
 # This is a no-op if the bucket already exists.
+
 
 @app.on_event("startup")
 def _ensure_bucket_on_startup() -> None:  # pragma: no cover
@@ -176,6 +177,7 @@ def _ensure_bucket_on_startup() -> None:  # pragma: no cover
     except Exception as exc:
         logger.warning("Could not ensure S3 bucket exists: %s", exc)
 
+
 # HEALTH CHECK ENDPOINTS
 # Used by Docker Compose, Kubernetes, and CI to verify the service is running.
 # These are intentionally lightweight and don't hit the database.
@@ -183,6 +185,7 @@ def _ensure_bucket_on_startup() -> None:  # pragma: no cover
 
 class HealthResponse(BaseModel):
     """Response model for health check endpoints."""
+
     status: str = "ok"
 
 
@@ -205,18 +208,18 @@ def live() -> HealthResponse:
 
 class HeatmapPoint(BaseModel):
     """Single detection point for the MapLibre heatmap layer.
-    
+
     Represents one sample from the database, transformed for frontend use.
-    
+
     Attributes:
         lat, lon: Geographic coordinates (WGS84)
         raw_count: Detection count from the detector (files_count field)
         effort_normalised_weight: Reserved for future effort-adjusted weighting
                                   (currently equals raw_count)
         timestamp_utc: When the sample was recorded
-    
+
     Example JSON output:
-        {"lat": 53.5, "lon": -7.2, "raw_count": 5, 
+        {"lat": 53.5, "lon": -7.2, "raw_count": 5,
          "effort_normalised_weight": 5, "timestamp_utc": "2024-05-16T21:00:00"}
     """
 
@@ -266,11 +269,11 @@ def get_heatmap_points(
     db: Session = Depends(get_db),
 ) -> List[HeatmapPoint]:
     """Return detection points for the heatmap, optionally filtered by time.
-    
+
     This endpoint serves raw sample data. Each row from maug_summary_samples
     becomes one HeatmapPoint in the response. For large datasets, consider
     using /api/heatmap/h3 instead (aggregates into fewer features).
-    
+
     Response size: ~100 bytes per point × number of matching samples
     """
 
@@ -291,7 +294,7 @@ def get_heatmap_points(
                     status_code=503, detail="Unable to fetch points from object storage"
                 ) from exc
             _set_cached_bytes(points_object, data)
-        
+
         # Parse GeoJSON format
         if points_object.endswith(".geojson"):
             payload = json.loads(data)
@@ -393,10 +396,10 @@ def get_heatmap_points(
 
 class H3Cell(BaseModel):
     """Aggregated statistics for a single H3 hexagon.
-    
+
     Multiple sample points falling within the same hex are summed together.
     The lat/lon is the centroid of contributing points (not the hex center).
-    
+
     Attributes:
         h3_index: H3 cell identifier (e.g., "872830828ffffff")
         lat, lon: Average position of samples in this cell
@@ -413,10 +416,10 @@ class H3Cell(BaseModel):
 
 class H3ParquetCell(BaseModel):
     """H3 cell loaded from pre-computed Parquet analytics.
-    
+
     Similar to H3Cell but includes polygon boundary for rendering,
     and uses different field names matching the ETL output.
-    
+
     Attributes:
         h3_index: H3 cell identifier
         lat, lon: Cell centroid (from h3.cell_to_latlng)
@@ -461,16 +464,16 @@ def get_heatmap_h3(
     db: Session = Depends(get_db),
 ) -> List[H3Cell]:
     """Return H3-binned aggregates for the heatmap.
-    
+
     This endpoint performs real-time aggregation:
     1. Query all samples in the time range from PostgreSQL
     2. Convert each (lat, lon) to an H3 cell index
     3. Sum raw_count values by H3 cell
     4. Return one H3Cell per unique hexagon
-    
+
     Performance: O(n) where n = samples in time range
     Response size: Much smaller than /points (one entry per hex, not per sample)
-    
+
     Example flow:
         3 samples at slightly different locations in Dublin →
         All map to same H3 cell "872830828ffffff" →
@@ -503,7 +506,7 @@ def get_heatmap_h3(
         raw = float(row.files_count or 1)
         # Convert lat/lon to H3 index at requested resolution
         idx = h3.latlng_to_cell(row.lat, row.lon, resolution)
-        
+
         # Accumulate into bucket
         bucket = buckets[idx]
         bucket["raw_count"] += raw
@@ -567,19 +570,19 @@ def get_heatmap_h3_parquet(
     ),
 ) -> List[H3ParquetCell]:
     """Serve H3 aggregates from pre-computed Parquet files.
-    
+
     Unlike /api/heatmap/h3, this endpoint reads from pre-computed analytics
     rather than aggregating on every request. This is much faster for large
     datasets and enables offline/batch processing pipelines.
-    
+
     File naming convention: h3_analytics_YYYY-MM-DD.parquet
     Location: data/analytics/h3_daily/ (local) or S3 bucket prefix
-    
+
     Data source selection:
         1. HEATMAP_H3_SOURCE env var (db, local, s3)
         2. Falls back to HEATMAP_SOURCE
         3. Default: local filesystem
-    
+
     Response includes hex polygon boundaries for client-side rendering.
     """
 
@@ -617,13 +620,13 @@ def get_heatmap_h3_parquet(
                     file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
                 except Exception:
                     continue
-                    
+
                 # Apply date range filters
                 if start is not None and file_date < start:
                     continue
                 if end is not None and file_date >= end:
                     continue
-                    
+
                 # Check cache first, then fetch from S3
                 cached = _get_cached_bytes(key)
                 if cached is None:
@@ -636,7 +639,7 @@ def get_heatmap_h3_parquet(
                         ) from exc
                     _set_cached_bytes(key, cached)
                 frames.append(pd.read_parquet(BytesIO(cached)))
-                
+
         # SOURCE: Local filesystem (default)
         else:
             base = Path(analytics_dir)
@@ -724,7 +727,7 @@ def get_heatmap_h3_parquet(
 
 class TimelineDateEntry(BaseModel):
     """A single date entry for the timeline sparkline.
-    
+
     Attributes:
         date: Calendar date (YYYY-MM-DD)
         sample_count: Number of distinct sample records on this date
@@ -738,7 +741,7 @@ class TimelineDateEntry(BaseModel):
 
 class TimelineResponse(BaseModel):
     """Response wrapper for timeline data.
-    
+
     Includes the full list of dates plus convenience fields for
     the min/max range (useful for initializing slider bounds).
     """
@@ -753,16 +756,16 @@ def get_timeline_dates(
     db: Session = Depends(get_db),
 ) -> TimelineResponse:
     """Return per-day statistics for the timeline slider.
-    
+
     Aggregates all samples by date to show:
     - How many distinct sample records exist per day
     - Total detection count per day (sum of files_count)
-    
+
     The frontend uses this to:
     1. Set the date range slider bounds (min_date → max_date)
     2. Display an activity sparkline (sample_count per day)
     3. Enable users to filter the heatmap by date range
-    
+
     Performance: Single SQL GROUP BY query, executed fresh each time.
     For large datasets, consider caching or pre-aggregating.
     """
@@ -812,7 +815,7 @@ def get_timeline_dates(
 @app.get("/", response_class=HTMLResponse, tags=["ui"])
 def index() -> Any:
     """Serve the main web UI shell.
-    
+
     Returns the index.html file which bootstraps the MapLibre-based
     frontend application. The HTML loads JavaScript that:
     1. Fetches /api/timeline/dates for the date slider
