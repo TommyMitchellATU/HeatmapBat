@@ -562,7 +562,7 @@ def get_heatmap_h3_parquet(
         ),
     ),
     analytics_dir: str = Query(
-        "data/analytics/h3_daily",
+        "/data/analytics/h3_daily",
         description=(
             "Base directory (or S3 prefix when HEATMAP_H3_SOURCE=s3) "
             "containing partitioned H3 analytics Parquet files."

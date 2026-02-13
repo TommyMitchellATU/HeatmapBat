@@ -2,8 +2,6 @@
 
 Interactive bat activity heatmap for Ireland. FastAPI backend serves bat detector summary data as H3 hexagon aggregates; a MapLibre-based UI provides timeline playback, zoom-adaptive hex resolution, and per-cell drill-down. Data can be sourced from PostGIS, local files, or S3/MinIO.
 
-![HeatmapBat Screenshot](https://via.placeholder.com/800x400?text=HeatmapBat+Map+UI)
-
 ## Features
 
 - **Interactive Map**: MapLibre GL map centered on Ireland with H3 hexagon visualization

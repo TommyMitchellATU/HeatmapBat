@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data (generated during pipeline, not source control)
+# Keep: MAUG-4050_A_Summary.txt (raw source data)
+# Ignore: all generated files below
+data/analytics/h3_daily/*.parquet
+data/exports/
+.env.local
+
+# Docker volumes
+db-data/
+minio-data/
+
+# Logs
+*.log
