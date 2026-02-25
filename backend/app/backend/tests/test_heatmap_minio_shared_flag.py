@@ -76,6 +76,8 @@ def test_shared_flag_reads_points_and_h3_from_s3(monkeypatch: Any) -> None:
 
     monkeypatch.setenv("HEATMAP_SOURCE", "s3")
     monkeypatch.setenv("S3_BUCKET", bucket)
+    monkeypatch.delenv("HEATMAP_H3_SOURCE", raising=False)
+    monkeypatch.delenv("HEATMAP_POINTS_SOURCE", raising=False)
     monkeypatch.setattr("app.main.list_keys", _fake_list_keys)
     monkeypatch.setattr("app.main.get_object_bytes", _fake_get_object_bytes)
     # Clear cache to avoid cross-test pollution
