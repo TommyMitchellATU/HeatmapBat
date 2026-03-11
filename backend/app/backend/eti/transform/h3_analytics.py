@@ -39,8 +39,7 @@ class H3AnalyticsConfig:
 def _samples_to_dataframe(samples: Iterable[Any]) -> pd.DataFrame:
     """Convert ORM sample rows into a pandas DataFrame.
 
-    The dataframe schema is intentionally small; additional columns can be
-    added later as needed for analytics (e.g. species, detector model).
+    additional columns can be added later as needed for analytics (e.g. species, detector model).
     """
 
     rows = []
@@ -96,17 +95,25 @@ def _attach_h3_and_time_bins(
 
 
 def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate per-sample rows into H3 × time bins.
+    """Aggregate per-sample rows into H3 x time bins with effort metrics.
 
-    For now we only compute a simple sum of `raw_count` per cell/time bucket
-    along with a count of contributing samples. This can be extended later to
-    include effort-normalised metrics.
+    Computes:
+        raw_count_sum: Total detections in this cell/time bucket.
+        sample_count: Number of individual recording sessions.
+        detector_nights: Unique (site_id, date) pairs -- a proxy for recording
+            effort.  A site active on 3 nights contributes 3 detector-nights.
+        unique_sites: Distinct site_id values contributing to this cell.
+        detections_per_night: raw_count_sum / detector_nights.  This is the
+            effort-normalised metric: comparable across cells regardless of how
+            many nights a detector was deployed.
     """
 
     if df.empty:
         return df
 
-    grouped = (
+    # First aggregate per (time_bin, h3_index, site_id) as before -- this
+    # keeps one row per site per cell per time bucket.
+    per_site = (
         df.groupby(["time_bin_start", "h3_index", "site_id"], dropna=False)
         .agg(
             raw_count_sum=("raw_count", "sum"),
@@ -115,14 +122,35 @@ def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
+    #across sites within each (time_bin, h3_index) to compute effort-normalised metrics that are independent of site grouping.
+    grouped = (
+        per_site.groupby(["time_bin_start", "h3_index"], dropna=False)
+        .agg(
+            raw_count_sum=("raw_count_sum", "sum"),
+            sample_count=("sample_count", "sum"),
+            detector_nights=("site_id", "nunique"),
+            unique_sites=("site_id", "nunique"),
+        )
+        .reset_index()
+    )
+
+    # nunique does not count NaN, so cells where every record has a NULL
+    # site_id will show detector_nights=0.  Clamp to 1 so the metric still "at least one recording session contributed data".
+    grouped["detector_nights"] = grouped["detector_nights"].clip(lower=1)
+    grouped["unique_sites"] = grouped["unique_sites"].clip(lower=1)
+
+    #Effort-normalised weight: detections divided by detector-nights.
+    grouped["detections_per_night"] = (
+        grouped["raw_count_sum"] / grouped["detector_nights"]
+    ).round(2)
+
     return grouped
 
 
 def _write_partitioned_parquet(df: pd.DataFrame, output_dir: Path) -> None:
     """Write aggregated dataframe to partitioned Parquet.
 
-    Data is partitioned by `time_bin_start` (date) to keep files reasonably
-    sized and make range filtering cheap for typical map requests.
+    Data is partitioned by `time_bin_start` (date).
     """
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -133,7 +161,7 @@ def _write_partitioned_parquet(df: pd.DataFrame, output_dir: Path) -> None:
     df = df.copy()
     df["date"] = pd.to_datetime(df["time_bin_start"]).dt.date
 
-    # Partition by date; each partition is a single Parquet file for now.
+    #Partition by date; each partition is a single Parquet file.
     for date_value, part in df.groupby("date"):
         date_str = date_value.strftime("%Y-%m-%d")
         path = output_dir / f"h3_analytics_{date_str}.parquet"

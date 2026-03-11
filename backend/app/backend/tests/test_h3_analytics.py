@@ -113,9 +113,11 @@ def test_attach_h3_and_time_bins_and_aggregate() -> None:
 
     agg = _aggregate(df)
 
-    # A single aggregated record for this H3 × time × site combination.
+    # A single aggregated record for this H3 x time combination (sites are
+    # rolled up into effort metrics).
     assert len(agg) == 1
     row = agg.iloc[0]
     assert row["raw_count_sum"] == 3  # 1 + 2
     assert row["sample_count"] == 2
-    assert row["site_id"] == "A"
+    assert row["detector_nights"] == 1  # one unique site in this cell
+    assert row["detections_per_night"] == 3.0  # 3 / 1

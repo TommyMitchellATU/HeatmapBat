@@ -424,7 +424,11 @@ class H3ParquetCell(BaseModel):
         h3_index: H3 cell identifier
         lat, lon: Cell centroid (from h3.cell_to_latlng)
         raw_count_sum: Total detections across all days loaded
-        sample_count: Number of individual samples aggregated
+        sample_count: Number of individual recording sessions aggregated
+        detector_nights: Number of unique (site, date) pairs — proxy for
+            recording effort in this cell
+        detections_per_night: raw_count_sum / detector_nights — the
+            effort-normalised weight, comparable across cells
         polygon: List of [lon, lat] pairs forming the hex boundary
     """
 
@@ -433,6 +437,8 @@ class H3ParquetCell(BaseModel):
     lon: float
     raw_count_sum: float
     sample_count: int
+    detector_nights: int = 0
+    detections_per_night: float = 0.0
     polygon: list[tuple[float, float]]
 
 
@@ -675,14 +681,33 @@ def get_heatmap_h3_parquet(
     if df.empty:
         return []
 
+    # Check whether the Parquet data includes effort columns (produced by
+    # the updated _aggregate transform).  Older Parquet files may lack them.
+    has_effort = "detector_nights" in df.columns
+
+    agg_spec: dict[str, tuple[str, str]] = {
+        "raw_count_sum": ("raw_count_sum", "sum"),
+        "sample_count": ("sample_count", "sum"),
+    }
+    if has_effort:
+        agg_spec["detector_nights"] = ("detector_nights", "sum")
+
     grouped = (
         df.groupby("h3_index", dropna=False)
-        .agg(
-            raw_count_sum=("raw_count_sum", "sum"),
-            sample_count=("sample_count", "sum"),
-        )
+        .agg(**agg_spec)
         .reset_index()
     )
+
+    # Compute effort-normalised metric; fall back to raw sum when effort
+    # data is unavailable (legacy Parquet files).
+    if has_effort:
+        grouped["detections_per_night"] = (
+            grouped["raw_count_sum"]
+            / grouped["detector_nights"].replace(0, 1)
+        ).round(2)
+    else:
+        grouped["detector_nights"] = 0
+        grouped["detections_per_night"] = grouped["raw_count_sum"]
 
     # STEP 3: Add geometry (centroid + polygon boundary)
     def _centroid(idx: str) -> tuple[float, float]:
@@ -713,6 +738,10 @@ def get_heatmap_h3_parquet(
                 lon=float(row["lon"]),
                 raw_count_sum=float(row["raw_count_sum"]),
                 sample_count=int(row["sample_count"]),
+                detector_nights=int(row.get("detector_nights", 0)),
+                detections_per_night=float(
+                    row.get("detections_per_night", row["raw_count_sum"])
+                ),
                 polygon=list(row["polygon"]),
             )
         )
