@@ -291,7 +291,8 @@ def get_heatmap_points(
                 data = get_object_bytes(points_object)
             except Exception as exc:
                 raise HTTPException(
-                    status_code=503, detail="Unable to fetch points from object storage"
+                    status_code=503,
+                    detail="Unable to fetch points from object storage",
                 ) from exc
             _set_cached_bytes(points_object, data)
 

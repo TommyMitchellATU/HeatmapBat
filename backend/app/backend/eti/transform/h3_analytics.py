@@ -39,7 +39,8 @@ class H3AnalyticsConfig:
 def _samples_to_dataframe(samples: Iterable[Any]) -> pd.DataFrame:
     """Convert ORM sample rows into a pandas DataFrame.
 
-    additional columns can be added later as needed for analytics (e.g. species, detector model).
+    additional columns can be added later as needed for analytics
+    (e.g. species, detector model).
     """
 
     rows = []
@@ -122,7 +123,8 @@ def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    #across sites within each (time_bin, h3_index) to compute effort-normalised metrics that are independent of site grouping.
+    # Across sites within each (time_bin, h3_index), compute
+    # effort-normalised metrics that are independent of site grouping.
     grouped = (
         per_site.groupby(["time_bin_start", "h3_index"], dropna=False)
         .agg(
@@ -135,11 +137,12 @@ def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # nunique does not count NaN, so cells where every record has a NULL
-    # site_id will show detector_nights=0.  Clamp to 1 so the metric still "at least one recording session contributed data".
+    # site_id will show detector_nights=0. Clamp to 1 so the metric still
+    # reflects that at least one recording session contributed data.
     grouped["detector_nights"] = grouped["detector_nights"].clip(lower=1)
     grouped["unique_sites"] = grouped["unique_sites"].clip(lower=1)
 
-    #Effort-normalised weight: detections divided by detector-nights.
+    # Effort-normalised weight: detections divided by detector-nights.
     grouped["detections_per_night"] = (
         grouped["raw_count_sum"] / grouped["detector_nights"]
     ).round(2)
@@ -161,7 +164,7 @@ def _write_partitioned_parquet(df: pd.DataFrame, output_dir: Path) -> None:
     df = df.copy()
     df["date"] = pd.to_datetime(df["time_bin_start"]).dt.date
 
-    #Partition by date; each partition is a single Parquet file.
+    # Partition by date; each partition is a single Parquet file.
     for date_value, part in df.groupby("date"):
         date_str = date_value.strftime("%Y-%m-%d")
         path = output_dir / f"h3_analytics_{date_str}.parquet"
