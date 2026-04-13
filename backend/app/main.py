@@ -692,18 +692,13 @@ def get_heatmap_h3_parquet(
     if has_effort:
         agg_spec["detector_nights"] = ("detector_nights", "sum")
 
-    grouped = (
-        df.groupby("h3_index", dropna=False)
-        .agg(**agg_spec)
-        .reset_index()
-    )
+    grouped = df.groupby("h3_index", dropna=False).agg(**agg_spec).reset_index()
 
     # Compute effort-normalised metric; fall back to raw sum when effort
     # data is unavailable (legacy Parquet files).
     if has_effort:
         grouped["detections_per_night"] = (
-            grouped["raw_count_sum"]
-            / grouped["detector_nights"].replace(0, 1)
+            grouped["raw_count_sum"] / grouped["detector_nights"].replace(0, 1)
         ).round(2)
     else:
         grouped["detector_nights"] = 0
@@ -781,9 +776,7 @@ class TimelineResponse(BaseModel):
 
 
 @app.get("/api/timeline/dates", response_model=TimelineResponse, tags=["timeline"])
-def get_timeline_dates(
-    db: Session = Depends(get_db),
-) -> TimelineResponse:
+def get_timeline_dates(db: Session = Depends(get_db)) -> TimelineResponse:
     """Return per-day statistics for the timeline slider.
 
     Aggregates all samples by date to show:
