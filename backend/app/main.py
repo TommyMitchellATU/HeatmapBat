@@ -83,8 +83,7 @@ from typing import Any, Dict, List, Optional
 
 import h3
 import pandas as pd
-from fastapi import Depends, FastAPI, Query
-from fastapi import HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
