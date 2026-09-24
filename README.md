@@ -24,6 +24,8 @@ Interactive bat activity heatmap for Ireland. FastAPI backend serves bat detecto
 | MinIO Console | 9001 | Web UI for S3 (minioadmin/minioadmin) |
 | Redis | 6379 | Reserved for caching (not yet wired) |
 
+MinIO runs from `pgsty/minio`, a community-maintained fork: the official `minio/minio` image was removed from Docker Hub in September 2026.
+
 ## Quick Start
 
 ```bash

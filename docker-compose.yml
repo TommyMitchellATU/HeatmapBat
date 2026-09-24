@@ -36,7 +36,9 @@ services:
 
   minio:
     # S3-compatible object storage with web console on 9001
-    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    # RULE: minio/minio was deleted from Docker Hub (2026-09-11) and quay.io needs a login;
+    # pgsty/minio is the maintained community fork. Do not switch back.
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     container_name: heatmapbat-minio
     command: server /data --console-address ":9001"
     environment:
