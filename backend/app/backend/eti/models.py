@@ -33,12 +33,14 @@ class MaugSummarySample(Base):
     # Surrogate primary key used internally by the database.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    # Identifier for the recording site / detector location.
-    # This is parsed from the detector summary filename (e.g. "D01" from
-    # "D01-BAT-0031" or similar patterns) so that downstream analyses
-    # can group samples by site without needing to know the original folder
-    # layout.
+    # Filename prefix before the first dash ("D01", "MEEN"); legacy, not a real site.
     site_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # Detector serial from the filename ("6771"); the physical device.
+    detector_serial: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    # Sub-folder the file was imported from ("special/D06", "NA"); None at the top level.
+    source_folder: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # Timestamp reconstructed from the DATE/TIME columns in the summary file.
     timestamp_utc: Mapped[datetime] = mapped_column(

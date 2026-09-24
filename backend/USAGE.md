@@ -39,13 +39,15 @@ docker compose down
 
 ### Import a single detector file
 ```bash
-docker compose exec api uv run python -m app.backend.eti.cli_import /data/MAUG-4050_A_Summary.txt
+docker compose exec api uv run python -m app.backend.eti.cli_import "/data/Summary Files/MAUG-4050_A_Summary.txt"
 ```
+A single file gets no folder flag unless you pass `--root`, e.g. `--root "/data/Summary Files"` for a file inside `special/`.
 
 ### Import all detector files in a directory
 ```bash
-docker compose exec api uv run python -m app.backend.eti.cli_import /data
+docker compose exec api uv run python -m app.backend.eti.cli_import "/data/Summary Files"
 ```
+Sub-folders are searched too. Each file's folder relative to the directory given (`NA`, `special`, `special/D06`) is stored as `source_folder`; top-level files get none. Importing a file twice inserts its rows twice.
 
 ### Import with Python script (more control)
 ```bash
@@ -65,12 +67,15 @@ PY
 ```
 
 ### Expected file format
-Detector summary files (`*_Summary.txt`) should have this structure:
+Detector summary files are named `[Dxx-]FARM-SERIAL_CARD_Summary.txt`, for example `D01-MEEN-6771_A_Summary.txt`. The 4-digit serial (`6771`) identifies the detector; the optional `Dxx-` prefix is an old processing-folder name and is ignored.
+
+Contents are one row per minute:
 ```
-Date,Time,Latitude,Longitude,FilesCount,...
-2024-05-16,20:55:59,51.7443,-9.31424,5,...
-2024-05-16,21:00:00,51.7443,-9.31424,3,...
+DATE,TIME,LAT,NS,LON,EW,POWER(V),TEMP(C),#FILES,#SCRUBBED,MIC0 TYPE
+2024-Sep-02,19:51:59,51.75235,n,9.28930,w,6.5,15.75,0,0,U2
+2024-Sep-02,20:23:59,51.75235,n,9.28930,w,6.5,14.25,1,0,U2
 ```
+Coordinates are unsigned; `NS`/`EW` give the hemisphere.
 
 ---
 
@@ -281,8 +286,16 @@ docker compose exec api bash -c "
 ### Pipeline with exports
 ```bash
 docker compose exec api uv run python -m app.backend.eti.pipeline \
-  /data /data/analytics --csv --geojson
+  "/data/Summary Files" /data/analytics --csv --geojson
 ```
+
+### Detector-nightly surveys (occupancy model input)
+The pipeline writes `/data/analytics/detector_nightly/detector_nightly_YYYY-MM-DD.parquet`: one row per night × H3 site × detector serial, with nights running noon to noon. To run only this step:
+```bash
+docker compose exec api uv run python -m app.backend.eti.transform.cli_detector_nightly \
+  /data/analytics/detector_nightly
+```
+Options: `--resolution` (H3 resolution defining a site, default 10), `--night-start-hour` (default 12), `--start`, `--end`. In the pipeline, use `--site-resolution` or `--skip-detector-nightly`.
 
 ### Pipeline options
 ```bash

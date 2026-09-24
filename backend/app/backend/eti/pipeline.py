@@ -1,12 +1,12 @@
 """ETL pipeline orchestration entrypoint.
 
 Coordinates extract → transform → load steps:
-1. Extract: Import detector *_Summary.txt files into PostGIS
-2. Transform: Generate H3 spatial aggregates as Parquet
+1. Extract: Import detector *_Summary.txt files (sub-folders included) into PostGIS
+2. Transform: Generate H3 daily aggregates and detector-nightly surveys as Parquet
 3. Load: Optionally export to CSV/GeoJSON for external use
 
 Run via CLI:
-    uv run python -m app.backend.eti.pipeline /data /data/analytics/h3_daily
+    uv run python -m app.backend.eti.pipeline "/data/Summary Files" /data/analytics
 
 Or import and call directly:
     from app.backend.eti.pipeline import run_etl
@@ -23,9 +23,18 @@ from pathlib import Path
 from typing import Optional
 
 from app.backend.eti.db import SessionLocal
-from app.backend.eti.extract.summary_import import load_summary_file
+from app.backend.eti.extract.summary_import import (
+    derive_source_folder,
+    find_summary_files,
+    load_summary_file,
+)
 from app.backend.eti.load.export import export_samples_to_csv
 from app.backend.eti.load.geojson_export import export_samples_to_geojson
+from app.backend.eti.transform.detector_nightly import (
+    SITE_H3_RESOLUTION,
+    DetectorNightlyConfig,
+    run_detector_nightly,
+)
 from app.backend.eti.transform.h3_analytics import H3AnalyticsConfig, run_h3_analytics
 
 logger = logging.getLogger(__name__)
@@ -38,6 +47,7 @@ class PipelineResult:
     files_imported: int
     rows_imported: int
     h3_output_dir: Optional[Path]
+    detector_nightly_dir: Optional[Path]
     csv_path: Optional[Path]
     geojson_path: Optional[Path]
 
@@ -49,23 +59,27 @@ def run_etl(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
     h3_resolution: int = 7,
+    site_resolution: int = SITE_H3_RESOLUTION,
     export_csv: bool = False,
     export_geojson: bool = False,
     skip_import: bool = False,
     skip_h3: bool = False,
+    skip_detector_nightly: bool = False,
 ) -> PipelineResult:
     """Run the full ETL pipeline.
 
     Args:
-        input_dir: Directory containing detector *_Summary.txt files.
+        input_dir: Directory searched recursively for *_Summary.txt files.
         output_dir: Base directory for outputs (H3 Parquet, exports).
         start: Optional start timestamp filter for analytics/exports.
         end: Optional end timestamp filter for analytics/exports.
-        h3_resolution: H3 resolution for spatial binning (default 7).
+        h3_resolution: H3 resolution for the map's daily binning (default 7).
+        site_resolution: H3 resolution that defines an occupancy site (default 10).
         export_csv: If True, also export samples to CSV.
         export_geojson: If True, also export samples to GeoJSON.
         skip_import: If True, skip the import step (use existing DB data).
         skip_h3: If True, skip H3 analytics generation.
+        skip_detector_nightly: If True, skip the detector-nightly survey table.
 
     Returns:
         PipelineResult with counts and output paths.
@@ -75,12 +89,13 @@ def run_etl(
     files_imported = 0
     rows_imported = 0
     h3_output: Optional[Path] = None
+    detector_output: Optional[Path] = None
     csv_path: Optional[Path] = None
     geojson_path: Optional[Path] = None
 
     # ── Step 1: Extract (import detector files to DB) ──
     if not skip_import:
-        summary_files = list(input_dir.glob("*_Summary.txt"))
+        summary_files = find_summary_files(input_dir)
         if summary_files:
             logger.info(
                 "Importing %d summary files from %s", len(summary_files), input_dir
@@ -89,10 +104,16 @@ def run_etl(
             try:
                 for path in summary_files:
                     try:
-                        count = load_summary_file(db, path)
+                        folder = derive_source_folder(path, input_dir)
+                        count = load_summary_file(db, path, source_folder=folder)
                         rows_imported += count
                         files_imported += 1
-                        logger.info("  Imported %d rows from %s", count, path.name)
+                        logger.info(
+                            "  Imported %d rows from %s (folder: %s)",
+                            count,
+                            path.name,
+                            folder or "-",
+                        )
                     except Exception as exc:
                         logger.warning("  Failed to import %s: %s", path.name, exc)
             finally:
@@ -119,6 +140,23 @@ def run_etl(
         parquet_count = len(list(h3_output.glob("h3_analytics_*.parquet")))
         logger.info("H3 analytics complete: %d Parquet files", parquet_count)
 
+    # ── Step 2b: Transform (detector-nightly surveys for occupancy models) ──
+    if not skip_detector_nightly:
+        detector_output = output_dir / "detector_nightly"
+        logger.info(
+            "Generating detector-nightly surveys (resolution=%d) → %s",
+            site_resolution,
+            detector_output,
+        )
+        run_detector_nightly(
+            start=start,
+            end=end,
+            output_dir=detector_output,
+            config=DetectorNightlyConfig(resolution=site_resolution),
+        )
+        night_count = len(list(detector_output.glob("detector_nightly_*.parquet")))
+        logger.info("Detector-nightly complete: %d Parquet files", night_count)
+
     # ── Step 3: Load (optional exports) ──
     if export_csv or export_geojson:
         exports_dir = output_dir / "exports"
@@ -144,6 +182,7 @@ def run_etl(
         files_imported=files_imported,
         rows_imported=rows_imported,
         h3_output_dir=h3_output,
+        detector_nightly_dir=detector_output,
         csv_path=csv_path,
         geojson_path=geojson_path,
     )
@@ -176,17 +215,23 @@ def main() -> None:
     parser.add_argument(
         "input_dir",
         type=Path,
-        help="Directory containing detector *_Summary.txt files",
+        help="Directory searched recursively for *_Summary.txt files",
     )
     parser.add_argument(
         "output_dir",
         type=Path,
-        help="Base output directory for H3 Parquet and exports",
+        help="Base output directory for Parquet outputs and exports",
     )
     parser.add_argument("--start", type=str, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, help="End date (YYYY-MM-DD)")
     parser.add_argument(
         "--resolution", type=int, default=7, help="H3 resolution (default: 7)"
+    )
+    parser.add_argument(
+        "--site-resolution",
+        type=int,
+        default=SITE_H3_RESOLUTION,
+        help=f"H3 resolution defining an occupancy site (default: {SITE_H3_RESOLUTION})",
     )
     parser.add_argument("--csv", action="store_true", help="Also export to CSV")
     parser.add_argument("--geojson", action="store_true", help="Also export to GeoJSON")
@@ -194,6 +239,11 @@ def main() -> None:
         "--skip-import", action="store_true", help="Skip file import step"
     )
     parser.add_argument("--skip-h3", action="store_true", help="Skip H3 analytics step")
+    parser.add_argument(
+        "--skip-detector-nightly",
+        action="store_true",
+        help="Skip the detector-nightly survey step",
+    )
 
     args = parser.parse_args()
 
@@ -203,10 +253,12 @@ def main() -> None:
         start=_parse_dt(args.start),
         end=_parse_dt(args.end),
         h3_resolution=args.resolution,
+        site_resolution=args.site_resolution,
         export_csv=args.csv,
         export_geojson=args.geojson,
         skip_import=args.skip_import,
         skip_h3=args.skip_h3,
+        skip_detector_nightly=args.skip_detector_nightly,
     )
 
     print("\n── Pipeline Summary ──")
@@ -214,6 +266,8 @@ def main() -> None:
     print(f"Rows imported:  {result.rows_imported}")
     if result.h3_output_dir:
         print(f"H3 Parquet:     {result.h3_output_dir}")
+    if result.detector_nightly_dir:
+        print(f"Detector night: {result.detector_nightly_dir}")
     if result.csv_path:
         print(f"CSV export:     {result.csv_path}")
     if result.geojson_path:

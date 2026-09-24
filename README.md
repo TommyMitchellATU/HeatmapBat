@@ -11,7 +11,7 @@ Interactive bat activity heatmap for Ireland. FastAPI backend serves bat detecto
 - **Click Details**: Popup showing detection counts, sample count, activity level, average per sample, and location info per hexagon
 - **Colour-Coded Legend**: Five-tier activity scale from Minimal (<1,000) to Very High (50,000+)
 - **Flexible Data Sources**: Read from PostGIS, local filesystem, or MinIO/S3 with environment flags
-- **Full ETL Pipeline**: Import → H3 analytics → CSV/GeoJSON export → Upload to S3
+- **Full ETL Pipeline**: Import → H3 analytics → detector-nightly surveys → CSV/GeoJSON export → Upload to S3
 - **In-Memory S3 Cache**: 5-minute TTL cache for S3 objects reduces latency and API calls
 
 ## Stack
@@ -98,7 +98,11 @@ All routes are defined in a single FastAPI application.
 
 | Model | Table | Fields |
 |-------|-------|--------|
-| `MaugSummarySample` | `maug_summary_samples` | `id`, `site_id`, `timestamp_utc`, `lat`, `lon`, `power_v`, `temp_c`, `files_count`, `scrubbed_count`, `mic0_type`, `raw_date`, `raw_time` |
+| `MaugSummarySample` | `maug_summary_samples` | `id`, `site_id`, `detector_serial`, `source_folder`, `timestamp_utc`, `lat`, `lon`, `power_v`, `temp_c`, `files_count`, `scrubbed_count`, `mic0_type`, `raw_date`, `raw_time` |
+
+- `detector_serial`: the 4-digit serial from the filename (`D01-MEEN-6771_A_Summary.txt` → `6771`), which identifies the physical detector.
+- `source_folder`: the sub-folder the file was imported from (`NA`, `special`, `special/D06`); empty for top-level files. It marks files that were set aside.
+- `site_id`: legacy filename prefix (`D01`, `MEEN`). It is not a real site; it still feeds `h3_daily`.
 
 ### Database (`backend/app/backend/eti/db.py`)
 
@@ -126,7 +130,7 @@ All routes are defined in a single FastAPI application.
 | Symbol | Purpose |
 |--------|---------|
 | `PipelineResult` | Dataclass summarising a run: `files_imported`, `rows_imported`, `h3_output_dir`, `csv_path`, `geojson_path` |
-| `run_etl(input_dir, output_dir, ...)` | Orchestrates Extract → Transform → Load. Supports `start`, `end`, `h3_resolution`, `export_csv`, `export_geojson`, `skip_import`, `skip_h3` flags. |
+| `run_etl(input_dir, output_dir, ...)` | Orchestrates Extract → Transform → Load. Searches `input_dir` recursively. Supports `start`, `end`, `h3_resolution`, `site_resolution`, `export_csv`, `export_geojson`, `skip_import`, `skip_h3`, `skip_detector_nightly` flags. |
 | `main()` | CLI entrypoint with argparse — `python -m app.backend.eti.pipeline` |
 
 ### Extract — Summary File Parser (`backend/app/backend/eti/extract/summary_import.py`)
@@ -135,8 +139,11 @@ All routes are defined in a single FastAPI application.
 |----------|---------|
 | `parse_lat_lon(lat_str, ns_str, lon_str, ew_str)` | Converts raw LAT/NS/LON/EW strings to `(float, float)` with hemisphere sign |
 | `parse_timestamp(date_str, time_str)` | Combines DATE (`2024-May-16`) and TIME (`20:55:59`) into a `datetime` |
-| `parse_summary_file(path)` | Parses a `*_Summary.txt` CSV into a list of `MaugSummarySample` objects |
-| `load_summary_file(db, path)` | Parses and inserts all rows from a summary file in a single DB transaction; returns row count |
+| `parse_detector_serial(path)` | Returns the detector serial from a filename (`D01-MEEN-6771_A_Summary` → `6771`) |
+| `derive_source_folder(path, root)` | Returns the file's folder relative to the import root (`special/D06`), or `None` at the root |
+| `find_summary_files(root)` | Returns every `*_Summary.txt` under `root`, including sub-folders |
+| `parse_summary_file(path, source_folder)` | Parses a `*_Summary.txt` CSV into a list of `MaugSummarySample` objects |
+| `load_summary_file(db, path, source_folder)` | Parses and inserts all rows from a summary file in a single DB transaction; returns row count |
 
 ### Transform — H3 Analytics (`backend/app/backend/eti/transform/h3_analytics.py`)
 
@@ -153,6 +160,21 @@ Internal helpers:
 | `_attach_h3_and_time_bins(df, config)` | Adds `h3_index` and `time_bin_start` columns |
 | `_aggregate(df)` | Two-stage aggregation: first per (time_bin, h3_index, site_id), then rolled up per (time_bin, h3_index) producing `raw_count_sum`, `sample_count`, `detector_nights`, `unique_sites`, and `detections_per_night` (effort-normalised) |
 | `_write_partitioned_parquet(df, output_dir)` | Outputs one Parquet file per date |
+
+### Transform — Detector-Nightly Surveys (`backend/app/backend/eti/transform/detector_nightly.py`)
+
+The input for the occupancy models: one row per **night × site × detector**. A site is a resolution-10 H3 hex (one wind-farm deployment); a survey is one detector recording for one night.
+
+| Symbol | Purpose |
+|--------|---------|
+| `NIGHT_START_HOUR` | Hour a survey night rolls over (default `12`, so nights run noon to noon) |
+| `SITE_H3_RESOLUTION` | H3 resolution that defines a site (default `10`) |
+| `DetectorNightlyConfig` | Dataclass with `resolution` and `night_start_hour` |
+| `assign_night(timestamps, night_start_hour)` | Labels each timestamp with the date its night started (`05-16 03:00` → night `05-15`) |
+| `build_detector_nightly(samples, config)` | Builds the survey table in memory; drops rows without a detector serial |
+| `run_detector_nightly(start, end, output_dir, config)` | Reads samples from the DB and writes `detector_nightly_YYYY-MM-DD.parquet` |
+
+Output columns: `night`, `h3_index`, `detector_serial`, `source_folder`, `raw_count_sum` (files recorded that night), `sample_count` (1-minute samples, i.e. effort).
 
 ### Load — Export Functions
 
@@ -186,8 +208,9 @@ Internal helpers:
 
 | Module | Command | Description |
 |--------|---------|-------------|
-| `app.backend.eti.cli_import` | `python -m app.backend.eti.cli_import <path>` | Import a single summary file or directory of `*_Summary.txt` files into the database |
-| `app.backend.eti.pipeline` | `python -m app.backend.eti.pipeline <input_dir> <output_dir> [options]` | Full ETL: import → H3 analytics → optional CSV/GeoJSON export |
+| `app.backend.eti.cli_import` | `python -m app.backend.eti.cli_import <path> [--root]` | Import a single summary file, or every `*_Summary.txt` under a directory (recursive, with folder flags) |
+| `app.backend.eti.pipeline` | `python -m app.backend.eti.pipeline <input_dir> <output_dir> [options]` | Full ETL: import → H3 analytics → detector-nightly surveys → optional CSV/GeoJSON export |
+| `app.backend.eti.transform.cli_detector_nightly` | `python -m app.backend.eti.transform.cli_detector_nightly <output_dir> [--start] [--end] [--resolution] [--night-start-hour]` | Run the detector-nightly survey transform on its own |
 | `app.backend.eti.upload_all_to_s3` | `python -m app.backend.eti.upload_all_to_s3` | Upload all exports + analytics to MinIO |
 | `app.backend.eti.export_to_s3` | `python -m app.backend.eti.export_to_s3` | Upload the combined summary CSV to S3 |
 | `app.backend.eti.transform.cli_h3_analytics` | `python -m app.backend.eti.transform.cli_h3_analytics <output_dir> [--start] [--end] [--resolution] [--time-freq]` | Run H3 × time analytics independently |
@@ -226,23 +249,33 @@ Single-page MapLibre app with client-side H3 re-aggregation.
 | `test_heatmap_minio_shared_flag.py` | `HEATMAP_SOURCE=s3` shared flag behaviour |
 | `test_h3_analytics.py` | H3 analytics transform functions |
 | `test_export.py` | CSV/GeoJSON export correctness |
+| `test_summary_import.py` | Serial parsing, folder flags, recursive file discovery |
+| `test_detector_nightly.py` | Noon-to-noon nights, one survey per detector per night, mid-night card swaps |
 
 ## Data Pipeline
 
 ### Adding New Data
 
-1. Place detector summary files (`*_Summary.txt`) in the `data/` folder
+1. Place detector summary files (`*_Summary.txt`) in `data/Summary Files/`. Files set aside for review go in a sub-folder (`NA/`, `special/`); they are still imported, and the folder name is kept as their `source_folder` flag.
 2. Run the full pipeline:
 
 ```bash
 docker compose exec api bash -c "
-  uv run python -m app.backend.eti.cli_import /data && \
-  uv run python -m app.backend.eti.pipeline /data /data/analytics --skip-import && \
+  uv run python -m app.backend.eti.cli_import '/data/Summary Files' && \
+  uv run python -m app.backend.eti.pipeline '/data/Summary Files' /data/analytics --skip-import && \
   uv run python -m app.backend.eti.upload_all_to_s3
 "
 ```
 
-This imports files → generates H3 analytics → uploads everything to MinIO.
+This imports files → generates H3 analytics and detector-nightly surveys → uploads everything to MinIO.
+
+Importing the same file twice inserts its rows twice. To rebuild from scratch, empty the table first (`TRUNCATE maug_summary_samples;`).
+
+**Existing databases:** `db/init.sql` only runs when the database volume is first created. To add the `detector_serial` and `source_folder` columns to an existing database, run it once by hand (it is safe to re-run):
+
+```bash
+docker compose exec -T db psql -U app -d app < db/init.sql
+```
 
 ### Pipeline Options
 
@@ -399,7 +432,9 @@ CI runs two jobs:
 │           │   │   └── summary_import.py    # Parser for *_Summary.txt files
 │           │   ├── transform/
 │           │   │   ├── h3_analytics.py      # H3 × time aggregation to Parquet
-│           │   │   └── cli_h3_analytics.py  # CLI for standalone H3 analytics
+│           │   │   ├── cli_h3_analytics.py  # CLI for standalone H3 analytics
+│           │   │   ├── detector_nightly.py  # Night × site × detector surveys to Parquet
+│           │   │   └── cli_detector_nightly.py # CLI for standalone detector-nightly
 │           │   └── load/
 │           │       ├── export.py            # CSV export function
 │           │       ├── geojson_export.py    # GeoJSON export function
@@ -410,13 +445,16 @@ CI runs two jobs:
 │               ├── test_timeline.py
 │               ├── test_export.py
 │               ├── test_h3_analytics.py
+│               ├── test_summary_import.py
+│               ├── test_detector_nightly.py
 │               ├── test_heatmap_points_s3.py
 │               ├── test_h3_parquet_s3.py
 │               └── test_heatmap_minio_shared_flag.py
 ├── data/
-│   ├── Summary Files/              # Detector summary files (*_Summary.txt)
+│   ├── Summary Files/              # Detector summary files (*_Summary.txt); NA/, special/ flagged
 │   ├── exports/                    # CSV/GeoJSON outputs
-│   └── analytics/h3_daily/         # Pre-computed H3 Parquet files
+│   ├── analytics/h3_daily/         # Pre-computed H3 Parquet files (map)
+│   └── analytics/detector_nightly/ # Night × site × detector surveys (occupancy models)
 └── db/
     └── init.sql                    # PostGIS extension + table schema
 ```
