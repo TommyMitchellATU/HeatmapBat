@@ -5,6 +5,8 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE TABLE IF NOT EXISTS maug_summary_samples (
     id SERIAL PRIMARY KEY,
     site_id TEXT,
+    detector_serial TEXT,
+    source_folder TEXT,
     timestamp_utc TIMESTAMP NOT NULL,
     lat DOUBLE PRECISION NOT NULL,
     lon DOUBLE PRECISION NOT NULL,
@@ -20,3 +22,8 @@ CREATE TABLE IF NOT EXISTS maug_summary_samples (
 -- Ensure the column exists even if the table was created before site_id was added.
 ALTER TABLE IF EXISTS maug_summary_samples
     ADD COLUMN IF NOT EXISTS site_id TEXT;
+
+-- Detector serial and source-folder flag; safe to re-run against an existing database.
+ALTER TABLE IF EXISTS maug_summary_samples
+    ADD COLUMN IF NOT EXISTS detector_serial TEXT,
+    ADD COLUMN IF NOT EXISTS source_folder TEXT;

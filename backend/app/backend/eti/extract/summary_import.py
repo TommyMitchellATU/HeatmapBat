@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -57,34 +58,60 @@ def parse_timestamp(date_str: str, time_str: str) -> datetime:
 
 
 def _derive_site_id_from_filename(source_path: Path) -> Optional[str]:
-    """Derive a site identifier from a detector summary filename.
+    """Return the filename prefix before the first dash (the legacy ``site_id``).
 
-    The exported summary files have the *site* at the front of the filename,
-    for example::
-
-        D04-BAT-3992_A_Summary.txt
-        D01-BAT-0031_A_Summary.txt
-        D02A-GANN-4098_B_Summary.txt
-
-    This helper relies only on that convention and does not care about the
-    surrounding folder layout. It treats everything before the first dash as
-    the site identifier, so the examples above yield ``"D04"``, ``"D01"`` and
-    ``"D02A"`` respectively.
+    ``D01-MEEN-6771_A_Summary.txt`` -> ``"D01"``, ``MEEN-6771_A_Summary.txt`` -> ``"MEEN"``.
+    Still feeds ``h3_daily``; use :func:`parse_detector_serial` for detector identity.
     """
 
     stem = source_path.stem  # e.g. "D04-BAT-3992_A_Summary"
 
-    # The site id is the first chunk before the first "-".
+    # TODO: the prefix is an old processing-folder name, not a site - fix with h3_daily.
     first = stem.split("-", 1)[0].strip()
     return first or None
 
 
+# Matches the serial in names like "D01-MEEN-6771_A_Summary" or "GANN-4035_A_Summary".
+_SERIAL_PATTERN = re.compile(r"-(\d+)_[A-Za-z]+_Summary$")
+
+
+def parse_detector_serial(source_path: Path) -> Optional[str]:
+    """Return the detector serial from a summary filename, or None if absent.
+
+    ``D01-MEEN-6771_A_Summary.txt`` -> ``"6771"``. The serial names the physical
+    device, which moves between wind farms, so it is the only stable detector id.
+    """
+
+    match = _SERIAL_PATTERN.search(source_path.stem)
+    return match.group(1) if match else None
+
+
+def derive_source_folder(source_path: Path, root: Path) -> Optional[str]:
+    """Return the file's folder relative to the import root, or None at the root.
+
+    ``root/special/D06/x_Summary.txt`` -> ``"special/D06"``. Used as the flag for
+    files set aside in sub-folders (``NA/``, ``special/``).
+    """
+
+    relative = source_path.parent.resolve().relative_to(root.resolve())
+    return relative.as_posix() if relative.parts else None
+
+
+def find_summary_files(root: Path) -> List[Path]:
+    """Return every ``*_Summary.txt`` under ``root``, including sub-folders, sorted."""
+
+    return sorted(root.rglob("*_Summary.txt"))
+
+
 def _parse_rows(
-    rows: Iterable[dict[str, str]], source_path: Path
+    rows: Iterable[dict[str, str]],
+    source_path: Path,
+    source_folder: Optional[str] = None,
 ) -> List[MaugSummarySample]:
     items: List[MaugSummarySample] = []
 
     site_id = _derive_site_id_from_filename(source_path)
+    detector_serial = parse_detector_serial(source_path)
 
     for row in rows:
         if not row.get("DATE") or not row.get("TIME"):
@@ -115,6 +142,8 @@ def _parse_rows(
             MaugSummarySample(
                 timestamp_utc=timestamp,
                 site_id=site_id,
+                detector_serial=detector_serial,
+                source_folder=source_folder,
                 lat=lat,
                 lon=lon,
                 power_v=power_v,
@@ -130,15 +159,19 @@ def _parse_rows(
     return items
 
 
-def parse_summary_file(path: Path) -> List[MaugSummarySample]:
-    """Parse a detector summary file from the local filesystem."""
+def parse_summary_file(
+    path: Path, source_folder: Optional[str] = None
+) -> List[MaugSummarySample]:
+    """Parse a detector summary file; ``source_folder`` is stored as its flag."""
 
     with path.open("r", newline="") as f:
         reader = csv.DictReader(f)
-        return _parse_rows(reader, source_path=path)
+        return _parse_rows(reader, source_path=path, source_folder=source_folder)
 
 
-def load_summary_file(db: Session, path: Path) -> int:
+def load_summary_file(
+    db: Session, path: Path, source_folder: Optional[str] = None
+) -> int:
     """Parse a summary file and insert all rows in a single transaction.
 
     Parameters
@@ -147,6 +180,8 @@ def load_summary_file(db: Session, path: Path) -> int:
         An active SQLAlchemy :class:`Session` bound to the target database.
     path:
         Filesystem path to the detector ``*_Summary.txt`` file to be imported.
+    source_folder:
+        Folder flag from :func:`derive_source_folder`; None for top-level files.
 
     Returns
     -------
@@ -154,7 +189,7 @@ def load_summary_file(db: Session, path: Path) -> int:
         The number of :class:`MaugSummarySample` rows persisted.
     """
 
-    samples = parse_summary_file(path)
+    samples = parse_summary_file(path, source_folder=source_folder)
     db.add_all(samples)
     db.commit()
     return len(samples)

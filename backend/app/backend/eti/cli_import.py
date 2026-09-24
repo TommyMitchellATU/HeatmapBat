@@ -2,29 +2,39 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Optional
 
 from app.backend.eti.db import SessionLocal
-from app.backend.eti.extract.summary_import import load_summary_file
+from app.backend.eti.extract.summary_import import (
+    derive_source_folder,
+    find_summary_files,
+    load_summary_file,
+)
 
 """Command-line entrypoint for importing detector summary files.
 
-This small CLI is designed to be run either from within the Docker ``api``
-container or any environment that has access to the target Postgres database
-and the detector ``*_Summary.txt`` files. It wires command-line parsing to the
-ETI parsing helpers and database session utilities.
+Imports one ``*_Summary.txt`` file, or every one under a directory (sub-folders
+included, each tagged with its folder as ``source_folder``).
 """
 
 
 def main() -> None:
-    """Parse arguments, import the given summary file, and report row count."""
+    """Parse arguments, import the file or directory, and report row counts."""
 
     parser = argparse.ArgumentParser(
-        description="Import a detector *_Summary.txt file into the database.",
+        description="Import detector *_Summary.txt files into the database.",
     )
     parser.add_argument(
         "path",
         type=str,
-        help="Path to detector *_Summary.txt file to import from local filesystem",
+        help="A *_Summary.txt file, or a directory searched recursively",
+    )
+    parser.add_argument(
+        "--root",
+        type=str,
+        default=None,
+        help="Folder that source_folder flags are relative to (default: the "
+        "directory given, or the file's own folder)",
     )
 
     args = parser.parse_args()
@@ -35,13 +45,21 @@ def main() -> None:
         # producing a friendly message on stderr.
         raise SystemExit(f"File not found: {path}")
 
+    files = find_summary_files(path) if path.is_dir() else [path]
+    root = Path(args.root) if args.root else (path if path.is_dir() else path.parent)
+
+    total = 0
     db = SessionLocal()
     try:
-        count = load_summary_file(db, path)
+        for file in files:
+            folder: Optional[str] = derive_source_folder(file, root)
+            count = load_summary_file(db, file, source_folder=folder)
+            total += count
+            print(f"Imported {count} rows from {file} (folder: {folder or '-'})")
     finally:
         db.close()
 
-    print(f"Imported {count} rows from {path}")
+    print(f"Done: {len(files)} files, {total} rows")
 
 
 if __name__ == "__main__":
