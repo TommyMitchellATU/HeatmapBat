@@ -454,7 +454,8 @@ CI runs two jobs:
 │   ├── Summary Files/              # Detector summary files (*_Summary.txt); NA/, special/ flagged
 │   ├── exports/                    # CSV/GeoJSON outputs
 │   ├── analytics/h3_daily/         # Pre-computed H3 Parquet files (map)
-│   └── analytics/detector_nightly/ # Night × site × detector surveys (occupancy models)
+│   ├── analytics/detector_nightly/ # Night × site × detector surveys (occupancy models)
+│   └── analytics/occupancy_predictions/ # Observed vs M6-predicted counts per hex-night (written by the notebook)
 └── db/
     └── init.sql                    # PostGIS extension + table schema
 ```
