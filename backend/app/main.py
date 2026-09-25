@@ -10,7 +10,8 @@ This file is the single entry point for the HeatmapBat API. It handles:
 
 2. DATA SOURCE RESOLUTION
    - Environment flags control whether data comes from DB, local files, or S3
-   - HEATMAP_SOURCE, HEATMAP_POINTS_SOURCE, HEATMAP_H3_SOURCE
+   - HEATMAP_SOURCE, HEATMAP_POINTS_SOURCE, HEATMAP_H3_SOURCE,
+     HEATMAP_PREDICTIONS_SOURCE
 
 3. CACHING LAYER
    - In-memory cache with 5-minute TTL for S3 objects
@@ -20,6 +21,10 @@ This file is the single entry point for the HeatmapBat API. It handles:
    - /api/heatmap/points  → Raw sample points (for point-based heatmaps)
    - /api/heatmap/h3      → Real-time H3 aggregation from DB
    - /api/heatmap/h3_parquet → Pre-computed H3 from Parquet files
+
+5b. OCCUPANCY ENDPOINTS (model vs reality)
+   - /api/occupancy/predictions → Observed vs M6-predicted activity per hex-night
+   - /api/occupancy/nights      → Nights with predictions, for the timeline
 
 5. TIMELINE ENDPOINT
    - /api/timeline/dates  → Per-day sample counts for timeline UI
@@ -139,6 +144,7 @@ def _set_cached_bytes(key: str, data: bytes) -> None:
 #   HEATMAP_SOURCE         - Shared override for both endpoints
 #   HEATMAP_POINTS_SOURCE  - Override for /api/heatmap/points only
 #   HEATMAP_H3_SOURCE      - Override for /api/heatmap/h3_parquet only
+#   HEATMAP_PREDICTIONS_SOURCE - Override for /api/occupancy/* only
 
 
 def _resolve_source(point_var: str, hex_var: str) -> tuple[str, str]:
@@ -158,6 +164,104 @@ def _resolve_source(point_var: str, hex_var: str) -> tuple[str, str]:
     return points_source.lower(), h3_source.lower()
 
 
+def _resolve_predictions_source() -> str:
+    """Source for /api/occupancy/*: HEATMAP_PREDICTIONS_SOURCE, then HEATMAP_SOURCE, then "local"."""
+    source = (
+        os.environ.get("HEATMAP_PREDICTIONS_SOURCE")
+        or os.environ.get("HEATMAP_SOURCE")
+        or "local"
+    )
+    return source.lower()
+
+
+# DAILY PARQUET LOADING
+# Shared by /api/heatmap/h3_parquet and /api/occupancy/*: one file per date,
+# named <file_prefix>YYYY-MM-DD.parquet, in a local directory or an S3 prefix.
+
+
+def _file_date(name: str, file_prefix: str) -> Optional[date]:
+    """Date in a '<file_prefix>YYYY-MM-DD.parquet' filename, or None if it doesn't match."""
+    if not name.startswith(file_prefix) or not name.endswith(".parquet"):
+        return None
+    date_str = name.removeprefix(file_prefix).removesuffix(".parquet")
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _in_range(file_date: date, start: Optional[date], end: Optional[date]) -> bool:
+    """True when start <= file_date < end; a missing bound is open."""
+    if start is not None and file_date < start:
+        return False
+    if end is not None and file_date >= end:
+        return False
+    return True
+
+
+def _load_daily_parquet(
+    base_dir: str,
+    file_prefix: str,
+    start: Optional[date],
+    end: Optional[date],
+    source: str,
+) -> list[pd.DataFrame]:
+    """Read every <file_prefix>YYYY-MM-DD.parquet in base_dir whose date is in [start, end).
+
+    base_dir is an S3 key prefix when source is "s3" (objects go through the
+    5-minute cache), otherwise a local directory; a missing directory gives [].
+    """
+    frames: list[pd.DataFrame] = []
+
+    if source == "s3":
+        try:
+            keys = list(list_keys(base_dir.rstrip("/") + "/"))
+        except Exception as exc:  # pragma: no cover - network failure path
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to list analytics objects from storage",
+            ) from exc
+
+        for key in keys:
+            file_date = _file_date(os.path.basename(key), file_prefix)
+            if file_date is None or not _in_range(file_date, start, end):
+                continue
+            cached = _get_cached_bytes(key)
+            if cached is None:
+                try:
+                    cached = get_object_bytes(key)
+                except Exception as exc:  # pragma: no cover - network failure path
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Unable to fetch analytics object from storage",
+                    ) from exc
+                _set_cached_bytes(key, cached)
+            frames.append(pd.read_parquet(BytesIO(cached)))
+        return frames
+
+    base = Path(base_dir)
+    if not base.exists():
+        return []
+    for path in sorted(base.glob(f"{file_prefix}*.parquet")):
+        file_date = _file_date(path.name, file_prefix)
+        if file_date is None or not _in_range(file_date, start, end):
+            continue
+        frames.append(pd.read_parquet(path))
+    return frames
+
+
+def _hex_centroid(idx: str) -> tuple[float, float]:
+    """(lat, lon) of an H3 cell's centre."""
+    lat, lon = h3.cell_to_latlng(idx)  # type: ignore[attr-defined]
+    return lat, lon
+
+
+def _hex_polygon(idx: str) -> list[tuple[float, float]]:
+    """H3 cell boundary as [lon, lat] pairs for GeoJSON (h3 returns lat, lon)."""
+    boundary = h3.cell_to_boundary(idx)  # type: ignore[attr-defined]
+    return [(lon, lat) for lat, lon in boundary]
+
+
 # STARTUP EVENT
 # When the server starts, ensure the S3 bucket exists (if S3 mode is enabled).
 # This is a no-op if the bucket already exists.
@@ -169,7 +273,8 @@ def _ensure_bucket_on_startup() -> None:  # pragma: no cover
     points_source, h3_source = _resolve_source(
         "HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE"
     )
-    if points_source != "s3" and h3_source != "s3":
+    predictions_source = _resolve_predictions_source()
+    if "s3" not in (points_source, h3_source, predictions_source):
         return  # S3 not used, skip bucket check
     try:
         ensure_bucket_exists()
@@ -592,86 +697,9 @@ def get_heatmap_h3_parquet(
     Response includes hex polygon boundaries for client-side rendering.
     """
 
-    # Determine data source (local filesystem or S3)
+    # STEP 1: Load all matching Parquet files (local or S3, per HEATMAP_H3_SOURCE)
     _, source = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
-
-    # HELPER: Load Parquet frames from local or S3
-    def _load_parquet_frames() -> list[pd.DataFrame]:
-        frames: list[pd.DataFrame] = []
-
-        # SOURCE: S3 (MinIO) - List and fetch Parquet files by date prefix
-        if source == "s3":
-            prefix = analytics_dir.rstrip("/") + "/"
-
-            try:
-                keys = list(list_keys(prefix))
-            except Exception as exc:  # pragma: no cover - network failure path
-                raise HTTPException(
-                    status_code=503,
-                    detail="Unable to list analytics objects from storage",
-                ) from exc
-
-            # Parse filenames to extract dates and filter by time range
-            # Expected format: h3_analytics_YYYY-MM-DD.parquet
-            for key in keys:
-                name = os.path.basename(key)
-                if not name.startswith("h3_analytics_") or not name.endswith(
-                    ".parquet"
-                ):
-                    continue
-                try:
-                    date_str = name.removeprefix("h3_analytics_").removesuffix(
-                        ".parquet"
-                    )
-                    file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                except Exception:
-                    continue
-
-                # Apply date range filters
-                if start is not None and file_date < start:
-                    continue
-                if end is not None and file_date >= end:
-                    continue
-
-                # Check cache first, then fetch from S3
-                cached = _get_cached_bytes(key)
-                if cached is None:
-                    try:
-                        cached = get_object_bytes(key)
-                    except Exception as exc:  # pragma: no cover - network failure path
-                        raise HTTPException(
-                            status_code=503,
-                            detail="Unable to fetch analytics object from storage",
-                        ) from exc
-                    _set_cached_bytes(key, cached)
-                frames.append(pd.read_parquet(BytesIO(cached)))
-
-        # SOURCE: Local filesystem (default)
-        else:
-            base = Path(analytics_dir)
-            if not base.exists():
-                return []
-
-            # Glob for Parquet files and filter by date
-            parquet_files = sorted(base.glob("h3_analytics_*.parquet"))
-            for path in parquet_files:
-                try:
-                    date_str = path.stem.split("_")[-1]
-                    file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                except Exception:
-                    continue
-
-                if start is not None and file_date < start:
-                    continue
-                if end is not None and file_date >= end:
-                    continue
-
-                frames.append(pd.read_parquet(path))
-
-        return frames
-
-    # STEP 1: Load all matching Parquet files
-    frames = _load_parquet_frames()
+    frames = _load_daily_parquet(analytics_dir, "h3_analytics_", start, end, source)
     if not frames:
         return []
 
@@ -705,23 +733,10 @@ def get_heatmap_h3_parquet(
         grouped["detections_per_night"] = grouped["raw_count_sum"]
 
     # STEP 3: Add geometry (centroid + polygon boundary)
-    def _centroid(idx: str) -> tuple[float, float]:
-        """Get the center point of an H3 cell."""
-        lat, lon = h3.cell_to_latlng(idx)  # type: ignore[attr-defined]
-        return lat, lon
-
-    def _polygon(idx: str) -> list[tuple[float, float]]:
-        """Get the hex boundary as [lon, lat] pairs for GeoJSON."""
-        boundary = h3.cell_to_boundary(idx)  # type: ignore[attr-defined]
-        # h3 returns (lat, lon) but GeoJSON needs (lon, lat)
-        # h3 returns (lat, lon) but GeoJSON needs (lon, lat)
-        return [(lon, lat) for lat, lon in boundary]
-
-    # Apply geometry functions to each H3 cell
     grouped[["lat", "lon"]] = grouped["h3_index"].apply(  # type: ignore[assignment]
-        lambda idx: pd.Series(_centroid(idx)),
+        lambda idx: pd.Series(_hex_centroid(idx)),
     )
-    grouped["polygon"] = grouped["h3_index"].apply(_polygon)
+    grouped["polygon"] = grouped["h3_index"].apply(_hex_polygon)
 
     # STEP 4: Build response with full cell data
     cells: List[H3ParquetCell] = []
@@ -742,6 +757,174 @@ def get_heatmap_h3_parquet(
         )
 
     return cells
+
+
+# ENDPOINTS: /api/occupancy/predictions, /api/occupancy/nights
+# Model vs reality: observed bat activity against leave-one-hex-out M6
+# predictions, exported by occupancy_modeling.ipynb section 15.
+
+_PREDICTIONS_DIR = "/data/analytics/occupancy_predictions"
+_PREDICTIONS_PREFIX = "occupancy_predictions_"
+
+
+class OccupancyPrediction(BaseModel):
+    """Observed vs predicted bat activity for one hex on one night.
+
+    Attributes:
+        night: Noon-to-noon night, labelled by its start date
+        h3_index: Site (resolution-10 H3 hex)
+        observed: Summed raw counts over the detectors surveyed that night
+        pred_mean, pred_median: Mean / median of the predicted total; the
+            median is the typical site and is what the map colour divides by
+        pred_lo, pred_hi: Central pred_interval band of the predicted total
+        pred_interval: Band width, e.g. 0.9 for the 5th to 95th percentile
+        n_detectors: Detector-nights summed into observed and predicted
+        prediction_kind: How it was predicted; "out_of_sample" = by a fit
+            that never saw this hex
+        lat, lon: Hex centre
+        polygon: Hex boundary as [lon, lat] pairs
+    """
+
+    night: date
+    h3_index: str
+    observed: int
+    pred_mean: float
+    pred_median: float
+    pred_lo: float
+    pred_hi: float
+    pred_interval: float
+    n_detectors: int
+    prediction_kind: str
+    lat: float
+    lon: float
+    polygon: list[tuple[float, float]]
+
+
+class OccupancyNight(BaseModel):
+    """One night that has predictions, summed over its hexes (timeline sparkline).
+
+    pred_median is the sum of the per-hex medians, not the median of the total.
+    """
+
+    night: date
+    observed: int
+    pred_median: float
+    n_hexes: int
+
+
+class OccupancyNightsResponse(BaseModel):
+    """All nights with predictions, plus the range for the slider bounds."""
+
+    nights: List[OccupancyNight]
+    min_night: Optional[date]
+    max_night: Optional[date]
+
+
+def _predictions_dir_query() -> Any:
+    """Shared predictions_dir query parameter for the /api/occupancy routes."""
+    return Query(
+        _PREDICTIONS_DIR,
+        description=(
+            "Directory (or S3 prefix when HEATMAP_PREDICTIONS_SOURCE=s3) "
+            "containing occupancy_predictions_YYYY-MM-DD.parquet files."
+        ),
+    )
+
+
+@app.get(
+    "/api/occupancy/predictions",
+    response_model=List[OccupancyPrediction],
+    tags=["occupancy"],
+)
+def get_occupancy_predictions(
+    start: Optional[date] = Query(
+        None, description="Inclusive first night (YYYY-MM-DD). Omit for all."
+    ),
+    end: Optional[date] = Query(
+        None, description="Exclusive last night (YYYY-MM-DD). Omit for all."
+    ),
+    predictions_dir: str = _predictions_dir_query(),
+) -> List[OccupancyPrediction]:
+    """Observed vs M6-predicted activity per hex-night, for nights in [start, end).
+
+    One row per hex per night, with hex geometry for rendering. Source:
+    HEATMAP_PREDICTIONS_SOURCE, then HEATMAP_SOURCE, then local files.
+    """
+    frames = _load_daily_parquet(
+        predictions_dir,
+        _PREDICTIONS_PREFIX,
+        start,
+        end,
+        _resolve_predictions_source(),
+    )
+    if not frames:
+        return []
+    df = pd.concat(frames, ignore_index=True).sort_values(["night", "h3_index"])
+
+    rows: List[OccupancyPrediction] = []
+    for row in df.to_dict(orient="records"):
+        lat, lon = _hex_centroid(row["h3_index"])
+        rows.append(
+            OccupancyPrediction(
+                night=row["night"],
+                h3_index=row["h3_index"],
+                observed=int(row["observed"]),
+                pred_mean=float(row["pred_mean"]),
+                pred_median=float(row["pred_median"]),
+                pred_lo=float(row["pred_lo"]),
+                pred_hi=float(row["pred_hi"]),
+                pred_interval=float(row["pred_interval"]),
+                n_detectors=int(row["n_detectors"]),
+                prediction_kind=row["prediction_kind"],
+                lat=lat,
+                lon=lon,
+                polygon=_hex_polygon(row["h3_index"]),
+            )
+        )
+    return rows
+
+
+@app.get(
+    "/api/occupancy/nights",
+    response_model=OccupancyNightsResponse,
+    tags=["occupancy"],
+)
+def get_occupancy_nights(
+    predictions_dir: str = _predictions_dir_query(),
+) -> OccupancyNightsResponse:
+    """Every night with predictions, oldest first, with totals across its hexes.
+
+    The model-vs-reality timeline uses this for its nights and sparkline.
+    """
+    frames = _load_daily_parquet(
+        predictions_dir, _PREDICTIONS_PREFIX, None, None, _resolve_predictions_source()
+    )
+    if not frames:
+        return OccupancyNightsResponse(nights=[], min_night=None, max_night=None)
+
+    per_night = (
+        pd.concat(frames, ignore_index=True)
+        .groupby("night")
+        .agg(
+            observed=("observed", "sum"),
+            pred_median=("pred_median", "sum"),
+            n_hexes=("h3_index", "nunique"),
+        )
+        .reset_index()
+        .sort_values("night")
+    )
+    nights = [
+        OccupancyNight(
+            night=row["night"],
+            observed=int(row["observed"]),
+            pred_median=float(row["pred_median"]),
+            n_hexes=int(row["n_hexes"]),
+        )
+        for row in per_night.to_dict(orient="records")
+    ]
+    return OccupancyNightsResponse(
+        nights=nights, min_night=nights[0].night, max_night=nights[-1].night
+    )
 
 
 # ENDPOINT: /api/timeline/dates
