@@ -4,7 +4,7 @@ Interactive bat activity heatmap for Ireland. FastAPI backend serves bat detecto
 
 ## Features
 
-- **Interactive Map**: MapLibre GL map centered on Ireland with OpenStreetMap tiles and H3 hexagon visualization
+- **Interactive Map**: MapLibre GL map centered on Ireland with an OpenFreeMap basemap (OpenStreetMap data) and H3 hexagon visualization
 - **Timeline Playback**: Day-by-day animation with sparkline activity graph, play/pause, speed controls (0.5x–4x)
 - **Cumulative Mode**: Toggle between single-day view and cumulative data up to the selected date
 - **Zoom-Adaptive Resolution**: H3 resolution adjusts automatically (res 3–12) as you zoom; client-side re-aggregation via h3-js
@@ -62,6 +62,13 @@ All routes are defined in a single FastAPI application.
 | `get_heatmap_h3()` | `GET /api/heatmap/h3` | Real-time H3 aggregation from PostGIS. Supports `?start=&end=&resolution=7` (range 0–15). Bins samples into hexagons on every request. |
 | `get_heatmap_h3_parquet()` | `GET /api/heatmap/h3_parquet` | Pre-computed H3 from Parquet files. Supports `?start=&end=&analytics_dir=`. Reads from local filesystem or S3 depending on `HEATMAP_H3_SOURCE`. Includes hex polygon boundaries. |
 
+#### Occupancy (model vs reality)
+
+| Function | Route | Description |
+|----------|-------|-------------|
+| `get_occupancy_predictions()` | `GET /api/occupancy/predictions` | Observed vs M6-predicted bat activity per hex-night, from the notebook's section 15 export. Supports `?start=&end=&predictions_dir=` (nights, end exclusive). Local or S3 per `HEATMAP_PREDICTIONS_SOURCE`. Includes hex polygon boundaries. |
+| `get_occupancy_nights()` | `GET /api/occupancy/nights` | Every night with predictions plus observed / predicted totals. Returns `{nights, min_night, max_night}` for the model-mode timeline. |
+
 #### Timeline
 
 | Function | Route | Description |
@@ -91,6 +98,9 @@ All routes are defined in a single FastAPI application.
 | `HeatmapPoint` | `/api/heatmap/points` | `lat`, `lon`, `raw_count`, `effort_normalised_weight`, `timestamp_utc` |
 | `H3Cell` | `/api/heatmap/h3` | `h3_index`, `lat`, `lon`, `raw_count`, `effort_normalised_weight` |
 | `H3ParquetCell` | `/api/heatmap/h3_parquet` | `h3_index`, `lat`, `lon`, `raw_count_sum`, `sample_count`, `detector_nights`, `detections_per_night`, `polygon` |
+| `OccupancyPrediction` | `/api/occupancy/predictions` | `night`, `h3_index`, `observed`, `pred_mean`, `pred_median`, `pred_lo`, `pred_hi`, `pred_interval`, `n_detectors`, `prediction_kind`, `lat`, `lon`, `polygon` |
+| `OccupancyNight` | `/api/occupancy/nights` | `night`, `observed`, `pred_median` (sum of per-hex medians), `n_hexes` |
+| `OccupancyNightsResponse` | `/api/occupancy/nights` | `nights`, `min_night`, `max_night` |
 | `TimelineDateEntry` | `/api/timeline/dates` | `date`, `sample_count`, `total_detections` |
 | `TimelineResponse` | `/api/timeline/dates` | `dates`, `min_date`, `max_date` |
 
@@ -246,6 +256,7 @@ Single-page MapLibre app with client-side H3 re-aggregation.
 | `test_timeline.py` | `/api/timeline/dates` response structure |
 | `test_heatmap_points_s3.py` | `/api/heatmap/points` in S3 mode |
 | `test_h3_parquet_s3.py` | `/api/heatmap/h3_parquet` in S3 mode |
+| `test_occupancy_predictions.py` | `/api/occupancy/*`: night filter, per-night sums, S3 mode, env precedence |
 | `test_heatmap_minio_shared_flag.py` | `HEATMAP_SOURCE=s3` shared flag behaviour |
 | `test_h3_analytics.py` | H3 analytics transform functions |
 | `test_export.py` | CSV/GeoJSON export correctness |
@@ -339,6 +350,7 @@ HEATMAP_SOURCE=s3
 #Or per-endpoint
 HEATMAP_POINTS_SOURCE=s3   # /api/heatmap/points
 HEATMAP_H3_SOURCE=s3       # /api/heatmap/h3_parquet
+HEATMAP_PREDICTIONS_SOURCE=s3  # /api/occupancy/*
 ```
 
 | Variable | Values | Default |
@@ -346,6 +358,7 @@ HEATMAP_H3_SOURCE=s3       # /api/heatmap/h3_parquet
 | `HEATMAP_SOURCE` | `db`, `local`, `s3` | — (shared fallback) |
 | `HEATMAP_POINTS_SOURCE` | `db`, `local`, `s3` | `db` |
 | `HEATMAP_H3_SOURCE` | `db`, `local`, `s3` | `local` |
+| `HEATMAP_PREDICTIONS_SOURCE` | `local`, `s3` | `local` |
 
 Resolution order: per-endpoint var → `HEATMAP_SOURCE` → defaults.
 
@@ -454,7 +467,8 @@ CI runs two jobs:
 │   ├── Summary Files/              # Detector summary files (*_Summary.txt); NA/, special/ flagged
 │   ├── exports/                    # CSV/GeoJSON outputs
 │   ├── analytics/h3_daily/         # Pre-computed H3 Parquet files (map)
-│   └── analytics/detector_nightly/ # Night × site × detector surveys (occupancy models)
+│   ├── analytics/detector_nightly/ # Night × site × detector surveys (occupancy models)
+│   └── analytics/occupancy_predictions/ # Observed vs M6-predicted counts per hex-night (written by the notebook)
 └── db/
     └── init.sql                    # PostGIS extension + table schema
 ```

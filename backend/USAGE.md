@@ -145,6 +145,7 @@ Or per-endpoint:
 ```bash
 HEATMAP_POINTS_SOURCE=s3   # /api/heatmap/points
 HEATMAP_H3_SOURCE=s3       # /api/heatmap/h3_parquet
+HEATMAP_PREDICTIONS_SOURCE=s3  # /api/occupancy/predictions, /api/occupancy/nights
 ```
 
 ### Restart API to apply changes
@@ -203,6 +204,17 @@ curl "http://localhost:8000/api/heatmap/h3_parquet?start=2024-05-16&end=2024-05-
 # Custom analytics directory
 curl "http://localhost:8000/api/heatmap/h3_parquet?analytics_dir=data/analytics/h3_daily"
 ```
+
+### Get model-vs-reality predictions (occupancy notebook export)
+```bash
+# One night (end is exclusive)
+curl "http://localhost:8000/api/occupancy/predictions?start=2024-07-20&end=2024-07-21"
+
+# Every night that has predictions, with totals (for the timeline)
+curl "http://localhost:8000/api/occupancy/nights"
+```
+Files: `data/analytics/occupancy_predictions/occupancy_predictions_YYYY-MM-DD.parquet`, written by
+`occupancy_modeling.ipynb` section 15. Re-run the notebook to regenerate them.
 
 ---
 
