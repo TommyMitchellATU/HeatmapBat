@@ -4,7 +4,7 @@ Interactive bat activity heatmap for Ireland. FastAPI backend serves bat detecto
 
 ## Features
 
-- **Interactive Map**: MapLibre GL map centered on Ireland with CARTO basemap tiles (OpenStreetMap data) and H3 hexagon visualization
+- **Interactive Map**: MapLibre GL map centered on Ireland with an OpenFreeMap basemap (OpenStreetMap data) and H3 hexagon visualization
 - **Timeline Playback**: Day-by-day animation with sparkline activity graph, play/pause, speed controls (0.5x–4x)
 - **Cumulative Mode**: Toggle between single-day view and cumulative data up to the selected date
 - **Zoom-Adaptive Resolution**: H3 resolution adjusts automatically (res 3–12) as you zoom; client-side re-aggregation via h3-js
