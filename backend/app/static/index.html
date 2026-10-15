@@ -501,36 +501,16 @@
       const dataCache = new Map();
 
       // ===== MAP INITIALIZATION =====
-      // RULE: Do not point the basemap at tile.openstreetmap.org - OSM's tile usage policy blocks
-      // app traffic (403 "Access blocked" tiles, seen from *.app.github.dev). CARTO serves OSM data
-      // for free light use: https://github.com/CartoDB/basemap-styles
-      /** Basemap raster tile URLs; swap "light_all" for "voyager" or "dark_all" to change the style. */
-      const BASEMAP_TILES = ["a", "b", "c", "d"].map(
-        (s) => `https://${s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png`
-      );
+      // RULE: The basemap must be a keyless, app-friendly provider. tile.openstreetmap.org returns
+      // 403 "Access blocked" tiles to app traffic (tile usage policy), and CARTO basemaps now return
+      // an "API KEY REQUIRED" image with HTTP 200 - so check the rendered tile, not the status code.
+      // OpenFreeMap allows free app use with no key: https://openfreemap.org
+      /** Basemap style URL; swap "positron" for "liberty" or "bright" to change the look. */
+      const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
 
       const map = new maplibregl.Map({
         container: "map",
-        style: {
-          version: 8,
-          sources: {
-            "basemap-tiles": {
-              type: "raster",
-              tiles: BASEMAP_TILES,
-              tileSize: 256,
-              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-            },
-          },
-          layers: [
-            {
-              id: "basemap-tiles-layer",
-              type: "raster",
-              source: "basemap-tiles",
-              minzoom: 0,
-              maxzoom: 19,
-            },
-          ],
-        },
+        style: BASEMAP_STYLE_URL,
         center: [-8.0, 53.5],
         zoom: 6.5,
         minZoom: 5.5,
