@@ -1,0 +1,11 @@
+// Codespaces dev container: the default universal image plus a Docker networking fix.
+{
+  "name": "HeatmapBat",
+  "image": "mcr.microsoft.com/devcontainers/universal:6",
+
+  // RULE: Codespaces carries a stale iptables-legacy rule set with FORWARD policy DROP that Docker
+  // (nf_tables) never updates, so compose containers cannot reach each other (api -> db times out,
+  // the timeline hangs). Allow traffic on compose bridges (br-*) in the legacy set on every start.
+  // Idempotent: -C checks for the rule before -I inserts it.
+  "postStartCommand": "if command -v iptables-legacy >/dev/null; then for d in -i -o; do sudo iptables-legacy -C FORWARD $d br-+ -j ACCEPT 2>/dev/null || sudo iptables-legacy -I FORWARD 1 $d br-+ -j ACCEPT; done; fi"
+}
