@@ -489,6 +489,7 @@
           </div>
           <div id="legend-activity">
           <h4>🦇 Bat Activity</h4>
+          <div class="legend-info" style="margin-bottom: 6px; font-size: 11px; color: #666;">Detections per detector-night</div>
           <div id="legend-activity-tiers"></div>
           <div class="legend-item">
             <div class="legend-color survey-trail"></div>
@@ -548,11 +549,11 @@
       let playSpeed = 1000;         // ms between frames
       let isCumulative = false;     // Show data up to date vs just that date
       let viewMode = "activity";    // "activity" | "model" (Model vs reality)
-      let activityTimeline = [];    // Calendar days from /api/timeline/dates
+      let activityTimeline = [];    // Nights from /api/activity/nights, mapped to timelineData's shape
       let modelTimeline = [];       // Nights from /api/occupancy/nights, same shape as activityTimeline
       let modelByNight = new Map(); // night -> prediction rows from /api/occupancy/predictions
       let modelSites = [];          // One prediction row per hex, for the not-surveyed outlines
-      let surveyWindows = [];       // First/last day per hex from /api/heatmap/survey_windows
+      let surveyWindows = [];       // First/last night per hex from /api/activity/survey_windows
       let modelView = "ratio";      // "observed" | "predicted" | "ratio" within Model vs reality
       let modelCellsShown = new Map(); // h3_index -> aggregated cell drawn in model mode, for the popup
 
@@ -608,8 +609,8 @@
 
       // ===== ACTIVITY COLOUR SCALE =====
       /**
-       * Count stops interpolated for activity hexes and the model's Observed / Predicted views,
-       * lowest first; both legends are built from this list so swatches match the fill.
+       * Count stops interpolated for the model's Observed / Predicted views, lowest first;
+       * the model legend is built from this list so swatches match the fill.
        */
       const ACTIVITY_COLOR_STOPS = [
         { value: 0, color: "#93c5fd", label: "Minimal (<1,000)" },
@@ -618,15 +619,27 @@
         { value: 20000, color: "#fca5a5", label: "High (20,000+)" },
         { value: 50000, color: "#dc2626", label: "Very High (50,000+)" },
       ];
+      /**
+       * Detections-per-detector-night stops interpolated for activity hexes, lowest first; the
+       * activity legend and popup tier are built from this list. Picked near the 10th / 45th /
+       * 70th / 92nd percentiles of hex-nights.
+       */
+      const ACTIVITY_RATE_STOPS = [
+        { value: 0, color: "#93c5fd", label: "Minimal (<10 per detector-night)" },
+        { value: 10, color: "#86efac", label: "Low (10+)" },
+        { value: 50, color: "#fcd34d", label: "Medium (50+)" },
+        { value: 100, color: "#fca5a5", label: "High (100+)" },
+        { value: 250, color: "#dc2626", label: "Very High (250+)" },
+      ];
       /** Fill opacity of activity hexes (and the model count views, so they look the same). */
       const ACTIVITY_FILL_OPACITY = 0.6;
       /** Outline colour and width in px of activity hexes (and the model count views). */
       const ACTIVITY_OUTLINE_COLOR = "#1e3a5f";
       const ACTIVITY_OUTLINE_PX = 1.5;
 
-      /** MapLibre expression colouring a feature by `property` on ACTIVITY_COLOR_STOPS. */
-      function activityColorExpression(property) {
-        return ["interpolate", ["linear"], ["get", property], ...ACTIVITY_COLOR_STOPS.flatMap(stop => [stop.value, stop.color])];
+      /** MapLibre expression colouring a feature by `property` on `stops` (count stops by default). */
+      function activityColorExpression(property, stops = ACTIVITY_COLOR_STOPS) {
+        return ["interpolate", ["linear"], ["get", property], ...stops.flatMap(stop => [stop.value, stop.color])];
       }
 
       // ===== H3 RESOLUTION MAPPING =====
@@ -664,11 +677,15 @@
         statusEl.textContent = "Loading timeline data...";
         await loadSurveyWindows();
         try {
-          const resp = await fetch("/api/timeline/dates");
+          const resp = await fetch("/api/activity/nights");
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
 
-          activityTimeline = data.dates;
+          activityTimeline = data.nights.map(n => ({
+            date: n.night,
+            sample_count: n.sample_count,
+            total_detections: n.raw_count_sum,
+          }));
           if (viewMode !== "activity") return;
           timelineData = activityTimeline;
 
@@ -696,7 +713,7 @@
         labelEnd.textContent = formatDate(timelineData[timelineData.length - 1].date);
         dateRangeEl.textContent = viewMode === "model"
           ? `${timelineData.length} nights with predictions`
-          : `${timelineData.length} days of data`;
+          : `${timelineData.length} nights of data`;
 
         buildSparkline();
         return true;
@@ -784,7 +801,7 @@
           bar.title = viewMode === "model"
             ? `Night of ${formatDate(entry.date)}: observed ${entry.total_detections.toLocaleString()}, ` +
               `predicted ~${Math.round(entry.pred_median).toLocaleString()} (sum of site medians)`
-            : `${formatDate(entry.date)}: ${entry.total_detections.toLocaleString()} detections`;
+            : `Night of ${formatDate(entry.date)}: ${entry.total_detections.toLocaleString()} detections`;
           bar.dataset.index = index;
           
           bar.addEventListener('click', () => {
@@ -829,11 +846,8 @@
           params.set("end", nextDay.toISOString().slice(0, 10));
         }
         
-        // Use pre-computed H3 parquet files (much faster than real-time computation)
-        // These are generated by the pipeline: python -m app.backend.eti.pipeline
-
         try {
-          const resp = await fetch(`/api/heatmap/h3_parquet?${params.toString()}`);
+          const resp = await fetch(`/api/activity/hexes?${params.toString()}`);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
           
@@ -862,7 +876,9 @@
           renderModelNight(entry.date);
           return;
         }
-        currentDateEl.textContent = formatDate(entry.date);
+        currentDateEl.textContent = isCumulative
+          ? `Season to night of ${formatDate(entry.date)}`
+          : `Night of ${formatDate(entry.date)}`;
         renderSurveyTrail(entry.date);
 
         // Fetch and display data
@@ -946,13 +962,16 @@
                 raw_count: 0,
                 effort_normalised_weight: 0,
                 sample_count: 0,
+                detector_nights: 0,
               });
             }
             
             const bucket = buckets.get(parentIndex);
             bucket.raw_count += p.raw_count_sum ?? p.raw_count ?? 0;
             bucket.effort_normalised_weight += p.effort_normalised_weight ?? p.raw_count_sum ?? p.raw_count ?? 0;
-            bucket.sample_count += 1;
+            // RULE: Sum the children's sample_count; adding 1 per child made the popup show "1 sample".
+            bucket.sample_count += p.sample_count ?? 0;
+            bucket.detector_nights += p.detector_nights ?? 0;
           } catch (err) {
             console.error("Error aggregating cell:", p.h3_index, err);
           }
@@ -988,7 +1007,10 @@
                 effort_normalised_weight: p.effort_normalised_weight ?? 0,
                 h3_index: p.h3_index,
                 resolution: h3.getResolution(p.h3_index),
-                sample_count: p.sample_count || 1,
+                sample_count: p.sample_count ?? 0,
+                detector_nights: p.detector_nights ?? 0,
+                // A parent hex's rate is sum / sum over its children, not a mean of their rates.
+                detections_per_night: (p.raw_count_sum ?? p.raw_count ?? 0) / Math.max(p.detector_nights ?? 0, 1),
               },
             });
           } catch (err) {
@@ -1001,7 +1023,7 @@
       function updateHexagonsForZoom() {
         if (viewMode !== "activity" || isUpdating) return;
         // RULE: An empty day must clear the hexes, not return early - otherwise the previous day's
-        // (or the cumulative) hexes stay drawn on days the h3_daily Parquet does not cover.
+        // (or the cumulative) hexes stay drawn on nights the detector_nightly Parquet does not cover.
         if (rawDataPoints.length === 0) {
           renderHexagons([]);
           currentDisplayResolution = null;
@@ -1051,7 +1073,7 @@
             type: "fill",
             source: hexSourceId,
             paint: {
-              "fill-color": activityColorExpression("raw_count"),
+              "fill-color": activityColorExpression("detections_per_night", ACTIVITY_RATE_STOPS),
               "fill-opacity": ACTIVITY_FILL_OPACITY,
             },
           });
@@ -1085,18 +1107,20 @@
         }
       }
 
-      /** The ACTIVITY_COLOR_STOPS tier a count falls in (the highest stop at or below it). */
-      function activityTier(count) {
-        return [...ACTIVITY_COLOR_STOPS].reverse().find(stop => count >= stop.value) ?? ACTIVITY_COLOR_STOPS[0];
+      /** The ACTIVITY_RATE_STOPS tier a rate falls in (the highest stop at or below it). */
+      function activityTier(rate) {
+        return [...ACTIVITY_RATE_STOPS].reverse().find(stop => rate >= stop.value) ?? ACTIVITY_RATE_STOPS[0];
       }
 
       function showPopup(lngLat, props) {
         const rawCount = props.raw_count ?? props.raw_count_sum ?? 0;
-        const sampleCount = props.sample_count ?? 1;
+        const sampleCount = props.sample_count ?? 0;
+        const detectorNights = props.detector_nights ?? 0;
+        const rate = props.detections_per_night ?? 0;
         const h3Index = props.h3_index ?? "Unknown";
         const resolution = props.resolution ?? "?";
 
-        const tier = activityTier(rawCount);
+        const tier = activityTier(rate);
         const activityLevel = tier.label.split(" (")[0];
 
         const html = `
@@ -1115,20 +1139,21 @@
                   <div class="label">Detections</div>
                 </div>
                 <div class="popup-stat">
-                  <div class="value">${sampleCount.toLocaleString()}</div>
-                  <div class="label">Samples</div>
+                  <div class="value">${rate.toFixed(1)}</div>
+                  <div class="label">Per detector-night</div>
                 </div>
                 <div class="popup-stat">
                   <div class="value"><span class="popup-swatch" style="background: ${tier.color}; opacity: ${ACTIVITY_FILL_OPACITY};"></span>${activityLevel}</div>
                   <div class="label">Activity</div>
                 </div>
                 <div class="popup-stat">
-                  <div class="value">${(rawCount / Math.max(sampleCount, 1)).toFixed(1)}</div>
-                  <div class="label">Avg/Sample</div>
+                  <div class="value">${detectorNights.toLocaleString()}</div>
+                  <div class="label">Detector-nights</div>
                 </div>
               </div>
               <div class="popup-location">
                 <strong>Location:</strong> ${lngLat.lat.toFixed(4)}°N, ${Math.abs(lngLat.lng).toFixed(4)}°W<br>
+                <strong>Samples:</strong> ${sampleCount.toLocaleString()} (1-minute log rows)<br>
                 <strong>H3 Cell:</strong> ${h3Index.slice(0, 15)}...<br>
                 <strong>Resolution:</strong> ${resolution}
               </div>
@@ -1155,7 +1180,7 @@
       /** Fetches every hex's survey window once; on failure the trail just stays empty. */
       async function loadSurveyWindows() {
         try {
-          const resp = await fetch("/api/heatmap/survey_windows");
+          const resp = await fetch("/api/activity/survey_windows");
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           surveyWindows = await resp.json();
         } catch (err) {
@@ -1221,13 +1246,13 @@
       /** Shows a grey labelled marker at every site whose survey ended before `dateStr`; none when cumulative. */
       function renderSurveyTrail(dateStr) {
         ensureSurveyTrailLayer();
-        const finished = isCumulative ? [] : surveyWindows.filter(w => w.last_date < dateStr);
+        const finished = isCumulative ? [] : surveyWindows.filter(w => w.last_night < dateStr);
         map.getSource("survey-trail").setData({
           type: "FeatureCollection",
           features: finished.map(w => ({
             type: "Feature",
             geometry: { type: "Point", coordinates: [w.lon, w.lat] },
-            properties: { h3_index: w.h3_index, label: formatSurveyWindow(w.first_date, w.last_date) },
+            properties: { h3_index: w.h3_index, label: formatSurveyWindow(w.first_night, w.last_night) },
           })),
         });
       }
@@ -1303,13 +1328,13 @@
       function buildModelLegendTiers() {
         const items = modelView === "ratio"
           ? [...MODEL_RATIO_TIERS].reverse().map(tier => legendItem(tier.color, tier.label, MODEL_RATIO_FILL_OPACITY))
-          : activityLegendItems();
+          : stopLegendItems(ACTIVITY_COLOR_STOPS);
         document.getElementById("legend-model-tiers").replaceChildren(...items);
       }
 
-      /** Legend rows for ACTIVITY_COLOR_STOPS, busiest first. */
-      function activityLegendItems() {
-        return [...ACTIVITY_COLOR_STOPS].reverse().map(stop => legendItem(stop.color, stop.label, ACTIVITY_FILL_OPACITY));
+      /** Legend rows for a colour-stop list, busiest first. */
+      function stopLegendItems(stops) {
+        return [...stops].reverse().map(stop => legendItem(stop.color, stop.label, ACTIVITY_FILL_OPACITY));
       }
 
       /** Captions the outside-band legend item with the exported band width. */
@@ -1605,7 +1630,7 @@
       });
 
       // ===== INITIALIZATION =====
-      document.getElementById("legend-activity-tiers").replaceChildren(...activityLegendItems());
+      document.getElementById("legend-activity-tiers").replaceChildren(...stopLegendItems(ACTIVITY_RATE_STOPS));
 
       map.on("load", () => {
         initTimeline();

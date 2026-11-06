@@ -111,7 +111,8 @@ docker compose exec db psql -U app -d app -c \
 ```bash
 docker compose exec api uv run python -m app.backend.eti.pipeline --skip-import
 ```
-This creates `data/analytics/h3_daily/h3_analytics_YYYY-MM-DD.parquet` files.
+This creates `data/analytics/h3_daily/h3_analytics_YYYY-MM-DD.parquet` (no longer read by the API) and
+`data/analytics/detector_nightly/detector_nightly_YYYY-MM-DD.parquet` (what the activity map reads).
 
 ---
 
@@ -128,7 +129,7 @@ docker compose exec api uv run python -m app.backend.eti.upload_all_to_s3
 ```
 This uploads:
 - Exports (GeoJSON, CSV) → `data/exports/`
-- H3 analytics (Parquet) → `data/analytics/h3_daily/`
+- H3 analytics (Parquet) → `data/analytics/h3_daily/` (detector_nightly is not uploaded yet, so `HEATMAP_ACTIVITY_SOURCE=s3` finds nothing)
 - Combined CSV → `data/maug_summary_samples_combined.csv`
 
 ### Upload a single CSV to MinIO
@@ -144,7 +145,7 @@ HEATMAP_SOURCE=s3
 Or per-endpoint:
 ```bash
 HEATMAP_POINTS_SOURCE=s3   # /api/heatmap/points
-HEATMAP_H3_SOURCE=s3       # /api/heatmap/h3_parquet, /api/heatmap/survey_windows
+HEATMAP_ACTIVITY_SOURCE=s3 # /api/activity/*
 HEATMAP_PREDICTIONS_SOURCE=s3  # /api/occupancy/predictions, /api/occupancy/nights
 ```
 
@@ -163,11 +164,12 @@ curl http://localhost:8000/health   # Readiness probe
 curl http://localhost:8000/live     # Liveness probe
 ```
 
-### Get timeline dates (for slider)
+### Get activity nights (for the slider)
 ```bash
-curl http://localhost:8000/api/timeline/dates
+curl http://localhost:8000/api/activity/nights
 ```
-Returns: `{dates: [{date, sample_count, total_detections}], min_date, max_date}`
+Returns: `{nights: [{night, raw_count_sum, sample_count, detector_nights, n_hexes}], min_night, max_night}`.
+A night runs noon to noon and is labelled by its start date.
 
 ### Get raw heatmap points
 ```bash
@@ -193,16 +195,19 @@ curl "http://localhost:8000/api/heatmap/h3?resolution=10"
 curl "http://localhost:8000/api/heatmap/h3?start=2024-05-16T00:00:00&end=2024-05-17T00:00:00&resolution=8"
 ```
 
-### Get H3 from pre-computed Parquet
+### Get activity hexes (detector_nightly Parquet, what the map draws)
 ```bash
-# All analytics
-curl "http://localhost:8000/api/heatmap/h3_parquet"
+# All nights
+curl "http://localhost:8000/api/activity/hexes"
 
-# Filtered by date
-curl "http://localhost:8000/api/heatmap/h3_parquet?start=2024-05-16&end=2024-05-20"
+# Nights 16-19 May (end is exclusive)
+curl "http://localhost:8000/api/activity/hexes?start=2024-05-16&end=2024-05-20"
 
-# Custom analytics directory
-curl "http://localhost:8000/api/heatmap/h3_parquet?analytics_dir=data/analytics/h3_daily"
+# Custom directory
+curl "http://localhost:8000/api/activity/hexes?nightly_dir=data/analytics/detector_nightly"
+
+# First / last night per hex (survey trail)
+curl "http://localhost:8000/api/activity/survey_windows"
 ```
 
 ### Get model-vs-reality predictions (occupancy notebook export)
@@ -398,7 +403,7 @@ docker compose exec api uv run pytest --cov=app --cov-report=term-missing
 | `S3_BUCKET` | `heatmapbat` | S3 bucket name |
 | `HEATMAP_SOURCE` | (none) | Shared data source: `db`, `local`, `s3` |
 | `HEATMAP_POINTS_SOURCE` | `db` | Points endpoint source |
-| `HEATMAP_H3_SOURCE` | `local` | H3 parquet endpoint source |
+| `HEATMAP_ACTIVITY_SOURCE` | `local` | `/api/activity/*` source: `local`, `s3` |
 
 ---
 

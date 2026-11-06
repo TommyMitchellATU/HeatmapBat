@@ -2,7 +2,7 @@
 
 This script uploads:
 1. GeoJSON/CSV exports (for /api/heatmap/points endpoint)
-2. H3 Parquet analytics (for /api/heatmap/h3_parquet endpoint)
+2. H3 Parquet analytics (h3_daily; no route reads it any more)
 
 After running this, set HEATMAP_SOURCE=s3 to use MinIO instead of local files.
 
@@ -35,6 +35,7 @@ def main() -> None:
     data_root = Path("/data")
     exports_dir = data_root / "exports"
     analytics_dir = data_root / "analytics" / "h3_daily"
+    # TODO: also upload analytics/detector_nightly, or HEATMAP_ACTIVITY_SOURCE=s3 finds no files.
 
     uploaded = 0
 
@@ -77,7 +78,7 @@ def main() -> None:
     print("  HEATMAP_SOURCE=s3")
     print("\nOr per-endpoint:")
     print("  HEATMAP_POINTS_SOURCE=s3")
-    print("  HEATMAP_H3_SOURCE=s3")
+    print("  HEATMAP_ACTIVITY_SOURCE=s3")
 
 
 if __name__ == "__main__":

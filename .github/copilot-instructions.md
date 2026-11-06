@@ -10,7 +10,7 @@ These notes help AI agents be immediately productive in this repo by capturing a
 - **Current work-in-progress**: Implementing research papers as Bayesian occupancy models in `occupancy_modeling.ipynb` (see "Occupancy modelling notebook" section below).
 
 ## Repo layout
-- `backend/app/main.py` — FastAPI app, heatmap + timeline routes, static file serving, and data-source resolution logic (~860 lines).
+- `backend/app/main.py` — FastAPI app, heatmap, activity and occupancy routes, static file serving, and data-source resolution logic (~860 lines).
 - `backend/app/backend/eti/` — ETL modules:
   - `models.py` (SQLAlchemy ORM for `maug_summary_samples`), `db.py` (session factory), `s3.py` (MinIO/S3 client wrappers), `pipeline.py` (placeholder orchestration).
   - `extract/summary_import.py` — summary file ingestion.
@@ -18,7 +18,7 @@ These notes help AI agents be immediately productive in this repo by capturing a
   - `load/export.py`, `load/geojson_export.py`, `load/cli_export.py`, `load/cli_geojson_export.py` — CSV/GeoJSON export logic and CLIs.
   - `export_to_s3.py`, `upload_all_to_s3.py` — S3 upload utilities.
   - `cli_import.py` — CLI-driven data import.
-- `backend/app/backend/tests/` — pytest suite (7 test files): `test_health.py`, `test_heatmap_points_s3.py`, `test_h3_parquet_s3.py`, `test_heatmap_minio_shared_flag.py`, `test_h3_analytics.py`, `test_export.py`, `test_timeline.py`.
+- `backend/app/backend/tests/` — pytest suite (7 test files): `test_health.py`, `test_heatmap_points_s3.py`, `test_activity.py`, `test_heatmap_minio_shared_flag.py`, `test_h3_analytics.py`, `test_export.py`, `test_occupancy_predictions.py`, and others.
 - `backend/app/static/index.html` — SPA frontend (MapLibre heatmap + timeline slider).
 - `occupancy_modeling.ipynb` — Bayesian occupancy modelling notebook (28 cells; PyMC/ArviZ). See dedicated section below.
 - `data/Summary Files/` — Raw bat detector summary text files (~60 files, naming: `SITE-ID_A_Summary.txt`).
@@ -41,13 +41,13 @@ curl http://localhost:8000/health
 docker compose exec api uv run pytest -q
 
 # Focused S3 tests
-docker compose exec api uv run pytest -q app/backend/tests/test_heatmap_points_s3.py app/backend/tests/test_h3_parquet_s3.py
+docker compose exec api uv run pytest -q app/backend/tests/test_heatmap_points_s3.py app/backend/tests/test_activity.py
 ```
 
 ## Data source flexibility (key pattern)
-- **Env flags**: `HEATMAP_SOURCE=s3` (shared override), `HEATMAP_POINTS_SOURCE`, `HEATMAP_H3_SOURCE` (per-endpoint; valid values: `db`, `local`, `s3`).
+- **Env flags**: `HEATMAP_SOURCE=s3` (shared override), `HEATMAP_POINTS_SOURCE`, `HEATMAP_ACTIVITY_SOURCE`, `HEATMAP_PREDICTIONS_SOURCE` (per-endpoint; valid values: `db`, `local`, `s3`).
 - **Precedence**: per-endpoint var → `HEATMAP_SOURCE` → defaults (`points=db`, `h3=local`).
-- **Resolution function**: `_resolve_source(point_var, hex_var)` in `backend/app/main.py` implements this logic; used by `/api/heatmap/points` and `/api/heatmap/h3_parquet`.
+- **Resolution functions**: `_resolve_points_source()`, `_resolve_activity_source()`, `_resolve_predictions_source()` in `backend/app/main.py`.
 - **Caching**: in-memory 5-minute TTL for S3 objects (`_object_cache` dict in `main.py`); bucket auto-created at startup via `ensure_bucket_exists()` (see `@app.on_event("startup")`).
 - **Test pattern**: use `monkeypatch.setenv("HEATMAP_POINTS_SOURCE", "s3")` to test S3 mode without mocking boto3; see `test_heatmap_minio_shared_flag.py` for full example using a fake S3 client.
 
@@ -56,11 +56,11 @@ docker compose exec api uv run pytest -q app/backend/tests/test_heatmap_points_s
 - **Heatmap endpoints**:
   - `/api/heatmap/points` → `List[HeatmapPoint]` (DB or S3 GeoJSON/CSV; honors `HEATMAP_POINTS_SOURCE`).
   - `/api/heatmap/h3` → `List[H3Cell]` (server-side H3 binning from PostGIS; always uses DB).
-  - `/api/heatmap/h3_parquet` → `List[H3ParquetCell]` (precomputed Parquet from `data/analytics/h3_daily` or S3; honors `HEATMAP_H3_SOURCE`). Supports `start`/`end` date query params.
+  - `/api/activity/hexes` → `List[ActivityHex]` (per-hex totals from `data/analytics/detector_nightly` or S3; honors `HEATMAP_ACTIVITY_SOURCE`). Supports `start`/`end` night query params. `/api/activity/survey_windows` gives first/last night per hex.
 - **Timeline endpoint**:
-  - `/api/timeline/dates` → `TimelineResponse` (per-day `sample_count` + `total_detections` from DB; provides `min_date`/`max_date` for slider bounds).
+  - `/api/activity/nights` → `ActivityNightsResponse` (per-night totals from detector_nightly; `min_night`/`max_night` for slider bounds). Nights run noon to noon.
 - **UI**: `/` serves `index.html` (SPA); `/static` mounts static assets.
-- **Weighting pattern**: `HeatmapPoint` exposes `raw_count` and `effort_normalised_weight` (placeholder; currently equals `raw_count`). `H3ParquetCell` includes effort-normalised fields: `detector_nights` (unique site-date pairs per cell), `detections_per_night` (raw_count_sum / detector_nights). The `_aggregate` function in `h3_analytics.py` performs a two-stage groupby to compute these metrics.
+- **Weighting pattern**: `HeatmapPoint` exposes `raw_count` and `effort_normalised_weight` (placeholder; currently equals `raw_count`). `ActivityHex` includes effort fields: `detector_nights` (detector x night surveys = detector_nightly row count), `detections_per_night` (raw_count_sum / detector_nights).
 
 ## Tests and quality
 - **Package manager**: [uv](https://github.com/astral-sh/uv) — use `uv run ...` for all tool execution.
