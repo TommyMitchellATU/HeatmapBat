@@ -77,6 +77,22 @@
         cursor: default;
       }
 
+      /* Activity | Model vs reality switch */
+      .view-toggle {
+        display: flex;
+        border-radius: 0.25rem;
+        overflow: hidden;
+      }
+
+      header .view-toggle button {
+        border-radius: 0;
+        background: #374151;
+      }
+
+      header .view-toggle button.active {
+        background: #2563eb;
+      }
+
       #map {
         flex: 1;
         position: relative;
@@ -118,6 +134,24 @@
         height: 20px;
         border-radius: 3px;
         border: 1px solid rgba(0,0,0,0.2);
+      }
+
+      .legend-color.outside-band {
+        background: white;
+        border: 3px solid #111827;
+        box-sizing: border-box;
+      }
+
+      .legend-color.not-surveyed {
+        background: white;
+        border: 2px dashed #6b7280;
+        box-sizing: border-box;
+      }
+
+      .legend-color.survey-trail {
+        background: #d1d5db;
+        border: 1px solid #6b7280;
+        box-sizing: border-box;
       }
 
       /* Timeline container */
@@ -392,6 +426,15 @@
         color: #1e3a5f;
       }
 
+      .popup-swatch {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+
       .popup-stat .label {
         font-size: 11px;
         color: #64748b;
@@ -419,33 +462,41 @@
         <h1>🦇 HeatmapBat – Activity Heatmap</h1>
         <div class="controls">
           <span class="status" id="status"></span>
+          <div class="view-toggle" role="group" aria-label="Map view">
+            <button type="button" class="active" data-mode="activity">Activity</button>
+            <button type="button" data-mode="model">Model vs reality</button>
+          </div>
+          <div class="view-toggle" id="model-view-toggle" role="group" aria-label="Model view" style="display: none;">
+            <button type="button" data-model-view="observed">Observed</button>
+            <button type="button" data-model-view="predicted">Predicted</button>
+            <button type="button" class="active" data-model-view="ratio">Ratio</button>
+          </div>
         </div>
       </header>
       <div id="map">
         <div class="map-legend">
+          <div id="legend-model" style="display: none;">
+            <h4 id="legend-model-title">Observed vs predicted</h4>
+            <div id="legend-model-tiers"></div>
+            <div class="legend-item" id="legend-outside-band-item">
+              <div class="legend-color outside-band"></div>
+              <span id="legend-outside-band">Outside the predicted band</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color not-surveyed"></div>
+              <span id="legend-not-surveyed">Site not surveyed this night</span>
+            </div>
+          </div>
+          <div id="legend-activity">
           <h4>🦇 Bat Activity</h4>
+          <div id="legend-activity-tiers"></div>
           <div class="legend-item">
-            <div class="legend-color" style="background: #991b1b;"></div>
-            <span>Very High (50,000+)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background: #ef4444;"></div>
-            <span>High (20,000+)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background: #f59e0b;"></div>
-            <span>Medium (5,000+)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background: #22c55e;"></div>
-            <span>Low (1,000+)</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color" style="background: #3b82f6;"></div>
-            <span>Minimal (&lt;1,000)</span>
+            <div class="legend-color survey-trail"></div>
+            <span>Survey finished (labelled with its dates)</span>
           </div>
           <div class="legend-info" id="resolution-info" style="margin-top: 8px; font-size: 11px; color: #666;">
             Data shown at Res <span id="current-res">5</span>
+          </div>
           </div>
         </div>
       </div>
@@ -471,7 +522,7 @@
             <div class="timeline-range" id="date-range">—</div>
           </div>
 
-          <div class="timeline-mode-toggle">
+          <div class="timeline-mode-toggle" id="cumulative-control">
             <span class="mode-label">Cumulative</span>
             <div class="toggle-switch" id="cumulative-toggle" title="Toggle cumulative mode"></div>
           </div>
@@ -496,7 +547,15 @@
       let playInterval = null;      // Interval ID for playback
       let playSpeed = 1000;         // ms between frames
       let isCumulative = false;     // Show data up to date vs just that date
-      
+      let viewMode = "activity";    // "activity" | "model" (Model vs reality)
+      let activityTimeline = [];    // Calendar days from /api/timeline/dates
+      let modelTimeline = [];       // Nights from /api/occupancy/nights, same shape as activityTimeline
+      let modelByNight = new Map(); // night -> prediction rows from /api/occupancy/predictions
+      let modelSites = [];          // One prediction row per hex, for the not-surveyed outlines
+      let surveyWindows = [];       // First/last day per hex from /api/heatmap/survey_windows
+      let modelView = "ratio";      // "observed" | "predicted" | "ratio" within Model vs reality
+      let modelCellsShown = new Map(); // h3_index -> aggregated cell drawn in model mode, for the popup
+
       // Cache for fetched data by date
       const dataCache = new Map();
 
@@ -538,11 +597,37 @@
       const btnNext = document.getElementById("btn-next");
       const speedSelector = document.getElementById("speed-selector");
       const cumulativeToggle = document.getElementById("cumulative-toggle");
+      const viewButtons = document.querySelectorAll(".view-toggle button[data-mode]");
+      const modelViewToggle = document.getElementById("model-view-toggle");
+      const modelViewButtons = modelViewToggle.querySelectorAll("button");
 
       // Store raw data points for re-aggregation
       let rawDataPoints = [];
       let currentDisplayResolution = null;
       let isUpdating = false;
+
+      // ===== ACTIVITY COLOUR SCALE =====
+      /**
+       * Count stops interpolated for activity hexes and the model's Observed / Predicted views,
+       * lowest first; both legends are built from this list so swatches match the fill.
+       */
+      const ACTIVITY_COLOR_STOPS = [
+        { value: 0, color: "#93c5fd", label: "Minimal (<1,000)" },
+        { value: 1000, color: "#86efac", label: "Low (1,000+)" },
+        { value: 5000, color: "#fcd34d", label: "Medium (5,000+)" },
+        { value: 20000, color: "#fca5a5", label: "High (20,000+)" },
+        { value: 50000, color: "#dc2626", label: "Very High (50,000+)" },
+      ];
+      /** Fill opacity of activity hexes (and the model count views, so they look the same). */
+      const ACTIVITY_FILL_OPACITY = 0.6;
+      /** Outline colour and width in px of activity hexes (and the model count views). */
+      const ACTIVITY_OUTLINE_COLOR = "#1e3a5f";
+      const ACTIVITY_OUTLINE_PX = 1.5;
+
+      /** MapLibre expression colouring a feature by `property` on ACTIVITY_COLOR_STOPS. */
+      function activityColorExpression(property) {
+        return ["interpolate", ["linear"], ["get", property], ...ACTIVITY_COLOR_STOPS.flatMap(stop => [stop.value, stop.color])];
+      }
 
       // ===== H3 RESOLUTION MAPPING =====
       // Maps map zoom level to H3 resolution for dynamic hex sizing.
@@ -577,37 +662,93 @@
       // ===== TIMELINE INITIALIZATION =====
       async function initTimeline() {
         statusEl.textContent = "Loading timeline data...";
+        await loadSurveyWindows();
         try {
           const resp = await fetch("/api/timeline/dates");
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
-          
-          timelineData = data.dates;
-          
-          if (timelineData.length === 0) {
-            statusEl.textContent = "No data available";
-            return;
-          }
 
-          // Setup slider
-          slider.min = 0;
-          slider.max = timelineData.length - 1;
-          slider.value = 0;
+          activityTimeline = data.dates;
+          if (viewMode !== "activity") return;
+          timelineData = activityTimeline;
 
-          // Setup labels
-          labelStart.textContent = formatDate(timelineData[0].date);
-          labelEnd.textContent = formatDate(timelineData[timelineData.length - 1].date);
-          dateRangeEl.textContent = `${timelineData.length} days of data`;
-
-          // Build sparkline
-          buildSparkline();
-
-          // Load initial data
+          if (!setupTimeline()) return;
           await goToDate(0);
-          
+
         } catch (err) {
           console.error("Failed to load timeline:", err);
           statusEl.textContent = "Failed to load timeline data";
+        }
+      }
+
+      /** Points the slider, end labels and sparkline at timelineData; false if it is empty. */
+      function setupTimeline() {
+        if (timelineData.length === 0) {
+          statusEl.textContent = "No data available";
+          sparklineEl.innerHTML = '';
+          return false;
+        }
+
+        slider.min = 0;
+        slider.max = timelineData.length - 1;
+
+        labelStart.textContent = formatDate(timelineData[0].date);
+        labelEnd.textContent = formatDate(timelineData[timelineData.length - 1].date);
+        dateRangeEl.textContent = viewMode === "model"
+          ? `${timelineData.length} nights with predictions`
+          : `${timelineData.length} days of data`;
+
+        buildSparkline();
+        return true;
+      }
+
+      /** Index of the timelineData entry closest in time to dateStr (0 if dateStr is unset). */
+      function nearestDateIndex(dateStr) {
+        if (!dateStr) return 0;
+        const target = Date.parse(dateStr);
+        let best = 0;
+        timelineData.forEach((entry, index) => {
+          if (Math.abs(Date.parse(entry.date) - target) < Math.abs(Date.parse(timelineData[best].date) - target)) {
+            best = index;
+          }
+        });
+        return best;
+      }
+
+      /** Switches between the Activity heatmap and Model vs reality, keeping the nearest date. */
+      async function setViewMode(mode) {
+        if (mode === viewMode) return;
+        pause();
+        const currentDate = timelineData[currentDateIndex]?.date;
+
+        if (mode === "model") {
+          statusEl.textContent = "Loading model predictions...";
+          try {
+            await loadModelData();
+          } catch (err) {
+            console.error("Failed to load model predictions:", err);
+            statusEl.textContent = "Failed to load model predictions";
+            return;
+          }
+        }
+
+        viewMode = mode;
+        timelineData = mode === "model" ? modelTimeline : activityTimeline;
+        viewButtons.forEach(btn => btn.classList.toggle("active", btn.dataset.mode === mode));
+        document.getElementById("legend-activity").style.display = mode === "activity" ? "" : "none";
+        document.getElementById("legend-model").style.display = mode === "model" ? "" : "none";
+        modelViewToggle.style.display = mode === "model" ? "" : "none";
+        setLayersVisible(ACTIVITY_LAYER_IDS, mode === "activity");
+        setLayersVisible(MODEL_LAYER_IDS, mode === "model");
+
+        if (!setupTimeline()) return;
+        await goToDate(nearestDateIndex(currentDate));
+      }
+
+      /** Shows or hides each of the given map layers that exists yet. */
+      function setLayersVisible(layerIds, visible) {
+        for (const id of layerIds) {
+          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
         }
       }
 
@@ -640,7 +781,10 @@
           bar.className = 'sparkline-bar';
           const height = Math.max(4, (entry.total_detections / maxDetections) * 100);
           bar.style.height = `${height}%`;
-          bar.title = `${formatDate(entry.date)}: ${entry.total_detections.toLocaleString()} detections`;
+          bar.title = viewMode === "model"
+            ? `Night of ${formatDate(entry.date)}: observed ${entry.total_detections.toLocaleString()}, ` +
+              `predicted ~${Math.round(entry.pred_median).toLocaleString()} (sum of site medians)`
+            : `${formatDate(entry.date)}: ${entry.total_detections.toLocaleString()} detections`;
           bar.dataset.index = index;
           
           bar.addEventListener('click', () => {
@@ -709,10 +853,18 @@
         slider.value = index;
         
         const entry = timelineData[index];
-        currentDateEl.textContent = formatDate(entry.date);
-        
         updateSparklineHighlight();
-        
+
+        if (viewMode === "model") {
+          currentDateEl.textContent = isCumulative
+            ? `Season to night of ${formatDate(entry.date)}`
+            : `Night of ${formatDate(entry.date)}`;
+          renderModelNight(entry.date);
+          return;
+        }
+        currentDateEl.textContent = formatDate(entry.date);
+        renderSurveyTrail(entry.date);
+
         // Fetch and display data
         statusEl.textContent = "Loading...";
         
@@ -726,7 +878,9 @@
         } else {
           data = await fetchDataForDate(entry.date);
         }
-        
+        // The user may have switched to Model vs reality while the fetch was in flight.
+        if (viewMode !== "activity") return;
+
         rawDataPoints = data;
         currentDisplayResolution = null; // Force re-render
         updateHexagonsForZoom();
@@ -845,8 +999,15 @@
       }
 
       function updateHexagonsForZoom() {
-        if (isUpdating || rawDataPoints.length === 0) return;
-        
+        if (viewMode !== "activity" || isUpdating) return;
+        // RULE: An empty day must clear the hexes, not return early - otherwise the previous day's
+        // (or the cumulative) hexes stay drawn on days the h3_daily Parquet does not cover.
+        if (rawDataPoints.length === 0) {
+          renderHexagons([]);
+          currentDisplayResolution = null;
+          return;
+        }
+
         const targetRes = getCurrentResolution();
         if (targetRes === currentDisplayResolution) return;
         
@@ -890,17 +1051,8 @@
             type: "fill",
             source: hexSourceId,
             paint: {
-              "fill-color": [
-                "interpolate",
-                ["linear"],
-                ["get", "raw_count"],
-                0, "#93c5fd",
-                1000, "#86efac",
-                5000, "#fcd34d",
-                20000, "#fca5a5",
-                50000, "#dc2626",
-              ],
-              "fill-opacity": 0.6,
+              "fill-color": activityColorExpression("raw_count"),
+              "fill-opacity": ACTIVITY_FILL_OPACITY,
             },
           });
 
@@ -909,11 +1061,14 @@
             type: "line",
             source: hexSourceId,
             paint: {
-              "line-color": "#1e3a5f",
-              "line-width": 1.5,
+              "line-color": ACTIVITY_OUTLINE_COLOR,
+              "line-width": ACTIVITY_OUTLINE_PX,
               "line-opacity": 0.9,
             },
           });
+
+          // Keeps the trail above the coarse parent hexes that cover nearby past sites when zoomed out.
+          if (map.getLayer("survey-trail")) map.moveLayer("survey-trail");
 
           map.on("click", hexFillLayerId, (e) => {
             if (!e.features.length) return;
@@ -930,21 +1085,19 @@
         }
       }
 
+      /** The ACTIVITY_COLOR_STOPS tier a count falls in (the highest stop at or below it). */
+      function activityTier(count) {
+        return [...ACTIVITY_COLOR_STOPS].reverse().find(stop => count >= stop.value) ?? ACTIVITY_COLOR_STOPS[0];
+      }
+
       function showPopup(lngLat, props) {
         const rawCount = props.raw_count ?? props.raw_count_sum ?? 0;
         const sampleCount = props.sample_count ?? 1;
         const h3Index = props.h3_index ?? "Unknown";
         const resolution = props.resolution ?? "?";
 
-        let activityLevel = "Low";
-        let activityColor = "#22c55e";
-        if (rawCount > 100) {
-          activityLevel = "High";
-          activityColor = "#ef4444";
-        } else if (rawCount > 30) {
-          activityLevel = "Medium";
-          activityColor = "#f59e0b";
-        }
+        const tier = activityTier(rawCount);
+        const activityLevel = tier.label.split(" (")[0];
 
         const html = `
           <div class="popup-content">
@@ -966,7 +1119,7 @@
                   <div class="label">Samples</div>
                 </div>
                 <div class="popup-stat">
-                  <div class="value" style="color: ${activityColor}">${activityLevel}</div>
+                  <div class="value"><span class="popup-swatch" style="background: ${tier.color}; opacity: ${ACTIVITY_FILL_OPACITY};"></span>${activityLevel}</div>
                   <div class="label">Activity</div>
                 </div>
                 <div class="popup-stat">
@@ -989,7 +1142,426 @@
           .addTo(map);
       }
 
+      // ===== SURVEY TRAIL =====
+      /** Image name of the grey hexagon marker for sites whose survey has finished. */
+      const SURVEY_TRAIL_IMAGE = "survey-trail-hex";
+      /** Label size in px for the survey dates under each trail marker. */
+      const SURVEY_TRAIL_LABEL_PX = 11;
+      /** Basemap font for the trail labels; must be one the style's glyph server provides. */
+      const SURVEY_TRAIL_FONT = ["Noto Sans Regular"];
+      /** Centre-to-corner radius in px of the fixed-size trail markers. */
+      const SURVEY_TRAIL_MARKER_RADIUS_PX = 11;
+
+      /** Fetches every hex's survey window once; on failure the trail just stays empty. */
+      async function loadSurveyWindows() {
+        try {
+          const resp = await fetch("/api/heatmap/survey_windows");
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          surveyWindows = await resp.json();
+        } catch (err) {
+          console.error("Failed to load survey windows:", err);
+        }
+      }
+
+      /** "16 May" for one day, "16-30 May" within one month, "25 Jun - 23 Jul" across two. */
+      function formatSurveyWindow(first, last) {
+        // Date-only strings parse as UTC midnight, so format in UTC to keep the calendar day.
+        const dayMonth = (s) => new Date(s).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+        if (first === last) return dayMonth(first);
+        if (first.slice(0, 7) === last.slice(0, 7)) {
+          return `${new Date(first).getUTCDate()}-${dayMonth(last)}`;
+        }
+        return `${dayMonth(first)} - ${dayMonth(last)}`;
+      }
+
+      /** Draws one pointy-top hexagon marker to ImageData at the screen's pixel ratio. */
+      function drawHexMarker({ fill, stroke, lineWidthPx, dashed }) {
+        const ratio = window.devicePixelRatio || 1;
+        const size = Math.ceil((SURVEY_TRAIL_MARKER_RADIUS_PX + lineWidthPx) * 2 * ratio);
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        ctx.scale(ratio, ratio);
+        const c = size / ratio / 2;
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) {
+          const angle = Math.PI / 180 * (60 * k - 90);
+          ctx.lineTo(c + SURVEY_TRAIL_MARKER_RADIUS_PX * Math.cos(angle), c + SURVEY_TRAIL_MARKER_RADIUS_PX * Math.sin(angle));
+        }
+        ctx.closePath();
+        if (fill) {
+          ctx.fillStyle = fill;
+          ctx.fill();
+        }
+        ctx.setLineDash(dashed ? [3, 3] : []);
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = lineWidthPx;
+        ctx.stroke();
+        return { image: ctx.getImageData(0, 0, size, size), pixelRatio: ratio };
+      }
+
+      /** Adds the trail source, its marker image and its symbol layer on first use. */
+      function ensureSurveyTrailLayer() {
+        if (map.getSource("survey-trail")) return;
+        const { image, pixelRatio } = drawHexMarker({ fill: "#d1d5db", stroke: "#6b7280", lineWidthPx: 1.5 });
+        map.addImage(SURVEY_TRAIL_IMAGE, image, { pixelRatio });
+        map.addSource("survey-trail", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        // Markers always draw; labels are optional so overlapping ones (the Cork sites zoomed out) drop out.
+        map.addLayer({
+          id: "survey-trail", type: "symbol", source: "survey-trail",
+          layout: {
+            "icon-image": SURVEY_TRAIL_IMAGE, "icon-allow-overlap": true, "icon-ignore-placement": true,
+            "text-field": ["get", "label"], "text-font": SURVEY_TRAIL_FONT, "text-size": SURVEY_TRAIL_LABEL_PX,
+            "text-anchor": "top", "text-offset": [0, 1.3], "text-optional": true,
+          },
+          paint: { "text-color": "#374151", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+        });
+      }
+
+      /** Shows a grey labelled marker at every site whose survey ended before `dateStr`; none when cumulative. */
+      function renderSurveyTrail(dateStr) {
+        ensureSurveyTrailLayer();
+        const finished = isCumulative ? [] : surveyWindows.filter(w => w.last_date < dateStr);
+        map.getSource("survey-trail").setData({
+          type: "FeatureCollection",
+          features: finished.map(w => ({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [w.lon, w.lat] },
+            properties: { h3_index: w.h3_index, label: formatSurveyWindow(w.first_date, w.last_date) },
+          })),
+        });
+      }
+
+      // ===== MODEL VS REALITY =====
+      /** Outline width in px for hex-nights whose observed total is outside the predicted band. */
+      const MODEL_OUTSIDE_BAND_LINE_PX = 4;
+      /**
+       * Colour tiers for observed / pred_median, lowest first. `upTo` is the tier's exclusive
+       * upper bound (the last tier has none); the legend is built from this list.
+       */
+      const MODEL_RATIO_TIERS = [
+        { upTo: 0.25, color: "#1d4ed8", label: "Much quieter (< 0.25x)" },
+        { upTo: 0.5, color: "#93c5fd", label: "Quieter (0.25-0.5x)" },
+        { upTo: 2, color: "#e5e7eb", label: "As expected (0.5-2x)" },
+        { upTo: 4, color: "#fb923c", label: "Busier (2-4x)" },
+        { upTo: null, color: "#b91c1c", label: "Much busier (> 4x)" },
+      ];
+      /** Feature property each count view colours by; Predicted uses the median, like the ratio. */
+      const MODEL_VIEW_PROPERTY = { observed: "observed", predicted: "pred_median" };
+      /** Fill opacity of the Ratio view. */
+      const MODEL_RATIO_FILL_OPACITY = 0.8;
+      /** Ratio given to a hex-night with activity but a zero predicted median (top tier). */
+      const MODEL_RATIO_CAP = 1e6;
+
+      const ACTIVITY_LAYER_IDS = ["heatmap-hex-fill", "heatmap-hex-outline", "survey-trail"];
+      const MODEL_LAYER_IDS = ["model-sites-line", "model-fill", "model-outline"];
+
+      /** Fetches the nights list and every prediction row once, grouped by night and by hex. */
+      async function loadModelData() {
+        if (modelTimeline.length) return;
+        const [nightsResp, predResp] = await Promise.all([
+          fetch("/api/occupancy/nights"),
+          fetch("/api/occupancy/predictions"),
+        ]);
+        if (!nightsResp.ok) throw new Error(`nights HTTP ${nightsResp.status}`);
+        if (!predResp.ok) throw new Error(`predictions HTTP ${predResp.status}`);
+        const nights = (await nightsResp.json()).nights;
+        const rows = await predResp.json();
+
+        modelByNight = new Map();
+        const sites = new Map();
+        for (const row of rows) {
+          if (!modelByNight.has(row.night)) modelByNight.set(row.night, []);
+          modelByNight.get(row.night).push(row);
+          sites.set(row.h3_index, row);
+        }
+        modelSites = [...sites.values()];
+        modelTimeline = nights.map(n => ({
+          date: n.night,
+          total_detections: n.observed,
+          pred_median: n.pred_median,
+          n_hexes: n.n_hexes,
+        }));
+        buildModelLegend(rows[0]?.pred_interval);
+      }
+
+      /** One legend row: a colour swatch (at the map's fill opacity) and its label. */
+      function legendItem(color, text, opacity = 1) {
+        const item = document.createElement("div");
+        item.className = "legend-item";
+        const swatch = document.createElement("div");
+        swatch.className = "legend-color";
+        swatch.style.background = color;
+        swatch.style.opacity = opacity;
+        const label = document.createElement("span");
+        label.textContent = text;
+        item.append(swatch, label);
+        return item;
+      }
+
+      /** Fills the model legend's tiers for the current view, busiest first. */
+      function buildModelLegendTiers() {
+        const items = modelView === "ratio"
+          ? [...MODEL_RATIO_TIERS].reverse().map(tier => legendItem(tier.color, tier.label, MODEL_RATIO_FILL_OPACITY))
+          : activityLegendItems();
+        document.getElementById("legend-model-tiers").replaceChildren(...items);
+      }
+
+      /** Legend rows for ACTIVITY_COLOR_STOPS, busiest first. */
+      function activityLegendItems() {
+        return [...ACTIVITY_COLOR_STOPS].reverse().map(stop => legendItem(stop.color, stop.label, ACTIVITY_FILL_OPACITY));
+      }
+
+      /** Captions the outside-band legend item with the exported band width. */
+      function buildModelLegend(predInterval) {
+        if (predInterval != null) {
+          document.getElementById("legend-outside-band").textContent =
+            `Outside the ${Math.round(predInterval * 100)}% predicted band`;
+        }
+      }
+
+      /** MapLibre `step` expression mapping the `ratio` property to its MODEL_RATIO_TIERS colour. */
+      function modelRatioColorExpression() {
+        const expr = ["step", ["get", "ratio"], MODEL_RATIO_TIERS[0].color];
+        for (let i = 1; i < MODEL_RATIO_TIERS.length; i++) {
+          expr.push(MODEL_RATIO_TIERS[i - 1].upTo, MODEL_RATIO_TIERS[i].color);
+        }
+        return expr;
+      }
+
+      /** The cell containing `h3Index` at `res`, or `h3Index` itself when it is already that coarse or finer. */
+      function modelCellAt(h3Index, res) {
+        return res < h3.getResolution(h3Index) ? h3.cellToParent(h3Index, res) : h3Index;
+      }
+
+      /** A GeoJSON polygon feature for one H3 cell. */
+      function modelCellFeature(h3Index, properties) {
+        const ring = h3.cellToBoundary(h3Index).map(([lat, lng]) => [lng, lat]);
+        ring.push(ring[0]);
+        return { type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties };
+      }
+
+      /**
+       * Sums site rows into their cells at `res`, like the activity map's aggregateToResolution.
+       * A cell is outside the band only when it holds one site that is: the band of a sum of
+       * sites is not exported.
+       */
+      function aggregateModelRows(rows, res) {
+        const cells = new Map();
+        for (const r of rows) {
+          const idx = modelCellAt(r.h3_index, res);
+          const cell = cells.get(idx) ?? {
+            h3_index: idx, observed: 0, pred_median: 0, pred_mean: 0, n_detectors: 0, n_sites: 0, outside_band: false, rows: [],
+          };
+          cell.observed += r.observed;
+          cell.pred_median += r.pred_median;
+          cell.pred_mean += r.pred_mean;
+          cell.n_detectors += r.n_detectors;
+          cell.n_sites += 1;
+          cell.rows.push(r);
+          cell.outside_band = cell.n_sites === 1 && (r.observed < r.pred_lo || r.observed > r.pred_hi);
+          cells.set(idx, cell);
+        }
+        return [...cells.values()];
+      }
+
+      /** Observed / pred_median plus the outside-band flag of an aggregated cell, as feature properties. */
+      function modelProperties(cell) {
+        let ratio = cell.pred_median > 0 ? cell.observed / cell.pred_median : (cell.observed > 0 ? MODEL_RATIO_CAP : 1);
+        ratio = Math.min(ratio, MODEL_RATIO_CAP);
+        return {
+          h3_index: cell.h3_index,
+          observed: cell.observed,
+          pred_median: cell.pred_median,
+          n_sites: cell.n_sites,
+          ratio,
+          outside_band: cell.outside_band,
+        };
+      }
+
+      /** Adds the two model sources and their layers on first use. */
+      function ensureModelLayers() {
+        if (map.getSource("model-night")) return;
+        const empty = { type: "FeatureCollection", features: [] };
+        map.addSource("model-sites", { type: "geojson", data: empty });
+        map.addSource("model-night", { type: "geojson", data: empty });
+
+        map.addLayer({
+          id: "model-sites-line", type: "line", source: "model-sites",
+          paint: { "line-color": "#6b7280", "line-width": 2, "line-dasharray": [2, 2] },
+        });
+        map.addLayer({
+          id: "model-fill", type: "fill", source: "model-night",
+        });
+        map.addLayer({ id: "model-outline", type: "line", source: "model-night" });
+        applyModelViewStyle();
+
+        map.on("click", "model-fill", (e) => {
+          if (e.features.length) showModelPopup(e.lngLat, e.features[0].properties.h3_index);
+        });
+        map.on("mouseenter", "model-fill", () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", "model-fill", () => { map.getCanvas().style.cursor = ""; });
+      }
+
+      /** The MODEL_RATIO_TIERS entry a ratio falls in, matching modelRatioColorExpression's steps. */
+      function ratioTier(ratio) {
+        return MODEL_RATIO_TIERS.find(tier => tier.upTo == null || ratio < tier.upTo);
+      }
+
+      /** One stat box for the popup grid. */
+      function popupStat(value, label) {
+        return `<div class="popup-stat"><div class="value">${value}</div><div class="label">${label}</div></div>`;
+      }
+
+      /** Popup for a model cell: observed vs predicted, the band for a single site-night, and how it was predicted. */
+      function showModelPopup(lngLat, h3Index) {
+        const cell = modelCellsShown.get(h3Index);
+        if (!cell) return;
+        const night = timelineData[currentDateIndex].date;
+        const site = cell.n_sites === 1 ? cell.rows[0] : null;
+        const showBand = site && !isCumulative;
+        const fmt = (n) => Math.round(n).toLocaleString();
+
+        const ratioText = cell.pred_median > 0 ? `${(cell.observed / cell.pred_median).toFixed(2)}x` : "n/a";
+        const tierText = cell.pred_median > 0 ? ratioTier(cell.observed / cell.pred_median).label : "Predicted 0";
+        const stats = [
+          popupStat(fmt(cell.observed), "Observed"),
+          popupStat(fmt(cell.pred_median), "Predicted (median)"),
+          popupStat(ratioText, tierText),
+          showBand
+            ? popupStat(`${fmt(site.pred_lo)}-${fmt(site.pred_hi)}`, `${Math.round(site.pred_interval * 100)}% band`)
+            : popupStat(fmt(cell.pred_mean), "Predicted (mean)"),
+        ];
+
+        const details = [];
+        if (showBand) {
+          const where = cell.observed > site.pred_hi ? "above" : cell.observed < site.pred_lo ? "below" : "inside";
+          details.push(`<strong>Band:</strong> observed is ${where} the ${Math.round(site.pred_interval * 100)}% predicted band`);
+        } else if (site) {
+          details.push("<strong>Band:</strong> not shown for a season total (only per night)");
+        } else {
+          details.push(`<strong>Sites in this cell:</strong> ${cell.n_sites} (zoom in to see each one; no band for a combined total)`);
+        }
+        if (isCumulative && site) details.push(`<strong>Nights counted:</strong> ${site.n_nights}`);
+        details.push(`<strong>Detector-nights:</strong> ${cell.n_detectors.toLocaleString()}`);
+        if (cell.rows.every(r => r.prediction_kind === "out_of_sample")) {
+          details.push(site
+            ? "<strong>Predicted:</strong> out of sample, by a model fit that never saw this site"
+            : "<strong>Predicted:</strong> out of sample, each site by a model fit that never saw it");
+        }
+        details.push(`<strong>H3 cell:</strong> ${h3Index} (res ${h3.getResolution(h3Index)})`);
+
+        const html = `
+          <div class="popup-content">
+            <div class="popup-header">
+              <div>
+                <h3>${site ? "Survey site" : `${cell.n_sites} survey sites`}</h3>
+                <div class="subtitle">${isCumulative ? "Season to night of" : "Night of"} ${formatDate(night)}</div>
+              </div>
+            </div>
+            <div class="popup-body">
+              <div class="popup-stats">${stats.join("")}</div>
+              <div class="popup-location">${details.join("<br>")}</div>
+            </div>
+          </div>
+        `;
+        new maplibregl.Popup({ closeButton: true, maxWidth: "320px" })
+          .setLngLat(lngLat)
+          .setHTML(html)
+          .addTo(map);
+      }
+
+      /** Ratio view: ratio tiers + band outline. Count views: the activity hexes' exact look. */
+      function applyModelViewStyle() {
+        if (!map.getLayer("model-fill")) return;
+        const ratio = modelView === "ratio";
+        map.setPaintProperty("model-fill", "fill-color",
+          ratio ? modelRatioColorExpression() : activityColorExpression(MODEL_VIEW_PROPERTY[modelView]));
+        map.setPaintProperty("model-fill", "fill-opacity", ratio ? MODEL_RATIO_FILL_OPACITY : ACTIVITY_FILL_OPACITY);
+        map.setPaintProperty("model-outline", "line-color", ratio ? "#111827" : ACTIVITY_OUTLINE_COLOR);
+        map.setPaintProperty("model-outline", "line-width",
+          ratio ? ["case", ["get", "outside_band"], MODEL_OUTSIDE_BAND_LINE_PX, 1] : ACTIVITY_OUTLINE_PX);
+      }
+
+      /**
+       * One row per hex summing observed and pred_median over every night up to and including
+       * `night`. pred_lo / pred_hi are unbounded because the band of a sum is not exported.
+       */
+      function seasonToDateRows(night) {
+        const byHex = new Map();
+        for (const [n, rows] of modelByNight) {
+          if (n > night) continue;
+          for (const r of rows) {
+            const acc = byHex.get(r.h3_index) ?? { ...r, observed: 0, pred_median: 0, pred_mean: 0, n_detectors: 0, n_nights: 0 };
+            acc.observed += r.observed;
+            // The mean of a sum is the sum of the means, so this one is exact.
+            acc.pred_mean += r.pred_mean;
+            acc.n_detectors += r.n_detectors;
+            // Summing medians approximates the median of the sum: the hex random effect, shared by
+            // every night at a hex, dominates the predictive spread. [doc: Model vs reality]
+            acc.pred_median += r.pred_median;
+            acc.n_nights += 1;
+            byHex.set(r.h3_index, acc);
+          }
+        }
+        return [...byHex.values()].map(r => ({ ...r, pred_lo: -Infinity, pred_hi: Infinity }));
+      }
+
+      /** Legend title and items for the current model view, per night or season to date. */
+      function updateModelLegendMode() {
+        const titles = {
+          observed: isCumulative ? "Season to date: observed passes" : "Observed passes this night",
+          predicted: isCumulative ? "Season to date: predicted passes (median)" : "Predicted passes this night (median)",
+          ratio: isCumulative ? "Season to date: observed vs predicted" : "Observed vs predicted",
+        };
+        document.getElementById("legend-model-title").textContent = titles[modelView];
+        buildModelLegendTiers();
+        document.getElementById("legend-outside-band-item").style.display =
+          modelView === "ratio" && !isCumulative ? "" : "none";
+        document.getElementById("legend-not-surveyed").textContent = isCumulative
+          ? "Site not surveyed yet" : "Site not surveyed this night";
+      }
+
+      /** Draws one night, or the season up to it when cumulative: coloured surveyed hexes, dashed outlines elsewhere. */
+      function renderModelNight(night) {
+        ensureModelLayers();
+        updateModelLegendMode();
+        const rows = isCumulative ? seasonToDateRows(night) : (modelByNight.get(night) ?? []);
+        const res = getCurrentResolution();
+        const cells = aggregateModelRows(rows, res);
+        const surveyedCells = new Set(cells.map(c => c.h3_index));
+        const unsurveyedCells = new Set(
+          modelSites.map(r => modelCellAt(r.h3_index, res)).filter(idx => !surveyedCells.has(idx)),
+        );
+
+        modelCellsShown = new Map(cells.map(c => [c.h3_index, c]));
+        const nightFeatures = cells.map(c => modelCellFeature(c.h3_index, modelProperties(c)));
+        const siteFeatures = [...unsurveyedCells].map(idx => modelCellFeature(idx, { h3_index: idx }));
+        map.getSource("model-night").setData({ type: "FeatureCollection", features: nightFeatures });
+        map.getSource("model-sites").setData({ type: "FeatureCollection", features: siteFeatures });
+
+        if (isCumulative) {
+          const observed = rows.reduce((acc, r) => acc + r.observed, 0);
+          const predicted = rows.reduce((acc, r) => acc + r.pred_median, 0);
+          statusEl.textContent = `Season to ${formatDateShort(night)}: ${rows.length} of ${modelSites.length} sites surveyed, ` +
+            `observed ${observed.toLocaleString()} vs predicted ~${Math.round(predicted).toLocaleString()}`;
+          return;
+        }
+        const outside = rows.filter(r => r.observed < r.pred_lo || r.observed > r.pred_hi).length;
+        const bandPct = rows.length ? Math.round(rows[0].pred_interval * 100) : null;
+        statusEl.textContent = `${formatDateShort(night)}: ${rows.length} of ${modelSites.length} sites surveyed` +
+          (bandPct != null ? `, ${outside} outside the ${bandPct}% band` : "");
+      }
+
       // ===== EVENT LISTENERS =====
+      viewButtons.forEach(btn => btn.addEventListener("click", () => setViewMode(btn.dataset.mode)));
+      modelViewButtons.forEach(btn => btn.addEventListener("click", () => {
+        modelView = btn.dataset.modelView;
+        modelViewButtons.forEach(b => b.classList.toggle("active", b === btn));
+        applyModelViewStyle();
+        if (viewMode === "model" && timelineData.length) renderModelNight(timelineData[currentDateIndex].date);
+      }));
+
       btnPlay.addEventListener("click", play);
       
       btnStart.addEventListener("click", () => {
@@ -1033,13 +1605,18 @@
       });
 
       // ===== INITIALIZATION =====
+      document.getElementById("legend-activity-tiers").replaceChildren(...activityLegendItems());
+
       map.on("load", () => {
         initTimeline();
         
         let zoomTimeout;
         map.on("zoomend", () => {
           clearTimeout(zoomTimeout);
-          zoomTimeout = setTimeout(() => updateHexagonsForZoom(), 150);
+          zoomTimeout = setTimeout(() => {
+            if (viewMode === "model" && timelineData.length) renderModelNight(timelineData[currentDateIndex].date);
+            else updateHexagonsForZoom();
+          }, 150);
         });
       });
     </script>

@@ -144,7 +144,7 @@ HEATMAP_SOURCE=s3
 Or per-endpoint:
 ```bash
 HEATMAP_POINTS_SOURCE=s3   # /api/heatmap/points
-HEATMAP_H3_SOURCE=s3       # /api/heatmap/h3_parquet
+HEATMAP_H3_SOURCE=s3       # /api/heatmap/h3_parquet, /api/heatmap/survey_windows
 HEATMAP_PREDICTIONS_SOURCE=s3  # /api/occupancy/predictions, /api/occupancy/nights
 ```
 

@@ -12,6 +12,7 @@ verification.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import inspect
 from sqlalchemy.exc import OperationalError
 
 from datetime import datetime
@@ -59,6 +60,11 @@ def test_export_samples_to_csv_tmp_path(tmp_path: Path) -> None:
         out_path = tmp_path / "export.csv"
         count = export_samples_to_csv(db, out_path)
     finally:
+        # RULE: delete the inserted row - this test writes to the real dev DB, and a leftover row
+        # becomes a stray hex at (54.0, -7.0) on the map once h3_daily is regenerated.
+        if inspect(sample).persistent:
+            db.delete(sample)
+            db.commit()
         db.close()
 
     assert count >= 1
