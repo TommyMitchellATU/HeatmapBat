@@ -21,6 +21,7 @@ This file is the single entry point for the HeatmapBat API. It handles:
    - /api/heatmap/points  → Raw sample points (for point-based heatmaps)
    - /api/heatmap/h3      → Real-time H3 aggregation from DB
    - /api/heatmap/h3_parquet → Pre-computed H3 from Parquet files
+   - /api/heatmap/survey_windows → First/last day per hex (survey trail)
 
 5b. OCCUPANCY ENDPOINTS (model vs reality)
    - /api/occupancy/predictions → Observed vs M6-predicted activity per hex-night
@@ -84,7 +85,7 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import h3
 import pandas as pd
@@ -653,6 +654,20 @@ def get_heatmap_h3(
 # Returns H3 aggregates from pre-computed Parquet files (faster for large data).
 # The ETL pipeline generates these files: one per day, stored locally or in S3.
 
+_H3_DAILY_DIR = "/data/analytics/h3_daily"
+_H3_DAILY_PREFIX = "h3_analytics_"
+
+
+def _h3_daily_dir_query() -> Any:
+    """Shared analytics_dir query parameter for the h3_daily Parquet routes."""
+    return Query(
+        _H3_DAILY_DIR,
+        description=(
+            "Base directory (or S3 prefix when HEATMAP_H3_SOURCE=s3) "
+            "containing partitioned H3 analytics Parquet files."
+        ),
+    )
+
 
 @app.get(
     "/api/heatmap/h3_parquet", response_model=List[H3ParquetCell], tags=["heatmap"]
@@ -672,13 +687,7 @@ def get_heatmap_h3_parquet(
             "available dates up to the latest are included."
         ),
     ),
-    analytics_dir: str = Query(
-        "/data/analytics/h3_daily",
-        description=(
-            "Base directory (or S3 prefix when HEATMAP_H3_SOURCE=s3) "
-            "containing partitioned H3 analytics Parquet files."
-        ),
-    ),
+    analytics_dir: str = _h3_daily_dir_query(),
 ) -> List[H3ParquetCell]:
     """Serve H3 aggregates from pre-computed Parquet files.
 
@@ -699,7 +708,7 @@ def get_heatmap_h3_parquet(
 
     # STEP 1: Load all matching Parquet files (local or S3, per HEATMAP_H3_SOURCE)
     _, source = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
-    frames = _load_daily_parquet(analytics_dir, "h3_analytics_", start, end, source)
+    frames = _load_daily_parquet(analytics_dir, _H3_DAILY_PREFIX, start, end, source)
     if not frames:
         return []
 
@@ -759,12 +768,101 @@ def get_heatmap_h3_parquet(
     return cells
 
 
+# ENDPOINT: /api/heatmap/survey_windows
+# First and last day each hex has data, for the activity map's survey trail.
+
+
+class SurveyWindow(BaseModel):
+    """The days one hex was surveyed, from the same h3_daily Parquet as the activity map.
+
+    Assumes one deployment per hex (each res-10 hex is one wind farm x one
+    deployment window), so the window is simply its first to last day.
+
+    Attributes:
+        h3_index: Site (resolution-10 H3 hex)
+        first_date, last_date: First and last day with data (inclusive)
+        n_days: Days with data inside the window
+        raw_count_sum: Total detections over the window
+        detector_nights: Summed detector-nights over the window
+        detections_per_night: raw_count_sum / detector_nights
+        lat, lon: Hex centre
+    """
+
+    h3_index: str
+    first_date: date
+    last_date: date
+    n_days: int
+    raw_count_sum: float
+    detector_nights: int
+    detections_per_night: float
+    lat: float
+    lon: float
+
+
+@app.get(
+    "/api/heatmap/survey_windows",
+    response_model=List[SurveyWindow],
+    tags=["heatmap"],
+)
+def get_survey_windows(
+    analytics_dir: str = _h3_daily_dir_query(),
+) -> List[SurveyWindow]:
+    """Every hex's survey window (first to last day with data), oldest first.
+
+    Reads all h3_daily files, so the dates match what /api/heatmap/h3_parquet
+    draws. Source: HEATMAP_H3_SOURCE, then HEATMAP_SOURCE, then local files.
+    """
+    _, source = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
+    frames = _load_daily_parquet(analytics_dir, _H3_DAILY_PREFIX, None, None, source)
+    if not frames:
+        return []
+    df = pd.concat(frames, ignore_index=True)
+    df["day"] = pd.to_datetime(df["time_bin_start"]).dt.date
+
+    windows = (
+        df.groupby("h3_index")
+        .agg(
+            first_date=("day", "min"),
+            last_date=("day", "max"),
+            n_days=("day", "nunique"),
+            raw_count_sum=("raw_count_sum", "sum"),
+            detector_nights=("detector_nights", "sum"),
+        )
+        .reset_index()
+        .sort_values(["first_date", "h3_index"])
+    )
+
+    rows: List[SurveyWindow] = []
+    for row in windows.to_dict(orient="records"):
+        lat, lon = _hex_centroid(row["h3_index"])
+        nights = int(row["detector_nights"])
+        rows.append(
+            SurveyWindow(
+                h3_index=row["h3_index"],
+                first_date=row["first_date"],
+                last_date=row["last_date"],
+                n_days=int(row["n_days"]),
+                raw_count_sum=float(row["raw_count_sum"]),
+                detector_nights=nights,
+                detections_per_night=round(
+                    float(row["raw_count_sum"]) / max(nights, 1), 2
+                ),
+                lat=lat,
+                lon=lon,
+            )
+        )
+    return rows
+
+
 # ENDPOINTS: /api/occupancy/predictions, /api/occupancy/nights
 # Model vs reality: observed bat activity against leave-one-hex-out M6
 # predictions, exported by occupancy_modeling.ipynb section 15.
 
 _PREDICTIONS_DIR = "/data/analytics/occupancy_predictions"
 _PREDICTIONS_PREFIX = "occupancy_predictions_"
+
+PredictionKind = Literal["out_of_sample", "forecast"]
+"""How a row was predicted; the notebook writes both kinds into the same nightly files."""
 
 
 class OccupancyPrediction(BaseModel):
@@ -780,7 +878,10 @@ class OccupancyPrediction(BaseModel):
         pred_interval: Band width, e.g. 0.9 for the 5th to 95th percentile
         n_detectors: Detector-nights summed into observed and predicted
         prediction_kind: How it was predicted; "out_of_sample" = by a fit
-            that never saw this hex
+            that never saw this hex, "forecast" = by a fit on nights before
+            this hex's survey started
+        forecast_from: Last night the forecast fit saw (forecast rows only)
+        forecast_sites: Sites in the forecast fit (forecast rows only)
         lat, lon: Hex centre
         polygon: Hex boundary as [lon, lat] pairs
     """
@@ -795,6 +896,8 @@ class OccupancyPrediction(BaseModel):
     pred_interval: float
     n_detectors: int
     prediction_kind: str
+    forecast_from: Optional[date] = None
+    forecast_sites: Optional[int] = None
     lat: float
     lon: float
     polygon: list[tuple[float, float]]
@@ -820,6 +923,45 @@ class OccupancyNightsResponse(BaseModel):
     max_night: Optional[date]
 
 
+def _load_predictions(
+    predictions_dir: str,
+    kind: PredictionKind,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+) -> pd.DataFrame:
+    """Prediction rows of one kind for nights in [start, end); empty if there are none.
+
+    Files written before forecasts existed have no prediction_kind values other
+    than out_of_sample and may lack the forecast columns.
+    """
+    frames = _load_daily_parquet(
+        predictions_dir, _PREDICTIONS_PREFIX, start, end, _resolve_predictions_source()
+    )
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    # RULE: filter by prediction_kind before any per-night sum - every kind shares the same
+    # nightly files, so /api/occupancy/nights would otherwise add forecasts to the
+    # out-of-sample totals and the map would draw two rows per hex-night. [doc: Model vs reality]
+    return df[df["prediction_kind"] == kind]
+
+
+def _optional(value: Any) -> Any:
+    """None for a missing Parquet value (NaN, NaT, pd.NA), else the value."""
+    return None if pd.isna(value) else value
+
+
+def _kind_query() -> Any:
+    """Shared kind query parameter for the /api/occupancy routes."""
+    return Query(
+        "out_of_sample",
+        description=(
+            "Which predictions to serve: out_of_sample (each hex by a fit that "
+            "never saw it) or forecast (each survey by a fit on earlier nights)."
+        ),
+    )
+
+
 def _predictions_dir_query() -> Any:
     """Shared predictions_dir query parameter for the /api/occupancy routes."""
     return Query(
@@ -843,23 +985,19 @@ def get_occupancy_predictions(
     end: Optional[date] = Query(
         None, description="Exclusive last night (YYYY-MM-DD). Omit for all."
     ),
+    kind: PredictionKind = _kind_query(),
     predictions_dir: str = _predictions_dir_query(),
 ) -> List[OccupancyPrediction]:
     """Observed vs M6-predicted activity per hex-night, for nights in [start, end).
 
-    One row per hex per night, with hex geometry for rendering. Source:
-    HEATMAP_PREDICTIONS_SOURCE, then HEATMAP_SOURCE, then local files.
+    One row per hex per night for the requested kind, with hex geometry for
+    rendering. Source: HEATMAP_PREDICTIONS_SOURCE, then HEATMAP_SOURCE, then
+    local files.
     """
-    frames = _load_daily_parquet(
-        predictions_dir,
-        _PREDICTIONS_PREFIX,
-        start,
-        end,
-        _resolve_predictions_source(),
-    )
-    if not frames:
+    df = _load_predictions(predictions_dir, kind, start, end)
+    if df.empty:
         return []
-    df = pd.concat(frames, ignore_index=True).sort_values(["night", "h3_index"])
+    df = df.sort_values(["night", "h3_index"])
 
     rows: List[OccupancyPrediction] = []
     for row in df.to_dict(orient="records"):
@@ -876,6 +1014,8 @@ def get_occupancy_predictions(
                 pred_interval=float(row["pred_interval"]),
                 n_detectors=int(row["n_detectors"]),
                 prediction_kind=row["prediction_kind"],
+                forecast_from=_optional(row.get("forecast_from")),
+                forecast_sites=_optional(row.get("forecast_sites")),
                 lat=lat,
                 lon=lon,
                 polygon=_hex_polygon(row["h3_index"]),
@@ -890,21 +1030,19 @@ def get_occupancy_predictions(
     tags=["occupancy"],
 )
 def get_occupancy_nights(
+    kind: PredictionKind = _kind_query(),
     predictions_dir: str = _predictions_dir_query(),
 ) -> OccupancyNightsResponse:
-    """Every night with predictions, oldest first, with totals across its hexes.
+    """Every night with predictions of the requested kind, oldest first, with totals across its hexes.
 
     The model-vs-reality timeline uses this for its nights and sparkline.
     """
-    frames = _load_daily_parquet(
-        predictions_dir, _PREDICTIONS_PREFIX, None, None, _resolve_predictions_source()
-    )
-    if not frames:
+    df = _load_predictions(predictions_dir, kind)
+    if df.empty:
         return OccupancyNightsResponse(nights=[], min_night=None, max_night=None)
 
     per_night = (
-        pd.concat(frames, ignore_index=True)
-        .groupby("night")
+        df.groupby("night")
         .agg(
             observed=("observed", "sum"),
             pred_median=("pred_median", "sum"),

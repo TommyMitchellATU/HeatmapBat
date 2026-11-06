@@ -159,3 +159,80 @@ def test_predictions_read_from_s3(monkeypatch: Any) -> None:
     assert len(data) == 1
     assert data[0]["h3_index"] == HEX_B
     assert data[0]["observed"] == 1292
+
+
+def _write_mixed(base: Path) -> None:
+    """One night holding both kinds, with nullable forecast columns as the notebook writes them."""
+    base.mkdir()
+    oos = _rows(date(2024, 9, 2), [HEX_A, HEX_B], [99, 1292])
+    forecast = _rows(date(2024, 9, 2), [HEX_B], [1292]).assign(
+        prediction_kind="forecast", pred_median=800.0
+    )
+    df = pd.concat([oos, forecast], ignore_index=True)
+    df["forecast_sites"] = pd.array([None, None, 5], dtype="Int64")
+    df["forecast_from"] = [None, None, date(2024, 9, 1)]
+    df.to_parquet(base / "occupancy_predictions_2024-09-02.parquet", index=False)
+
+
+def test_predictions_default_kind_excludes_forecasts(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HEATMAP_PREDICTIONS_SOURCE", "local")
+    base = tmp_path / "preds"
+    _write_mixed(base)
+    client = TestClient(app)
+
+    default = client.get(
+        "/api/occupancy/predictions", params={"predictions_dir": str(base)}
+    ).json()
+    forecast = client.get(
+        "/api/occupancy/predictions",
+        params={"predictions_dir": str(base), "kind": "forecast"},
+    ).json()
+
+    assert [(r["h3_index"], r["prediction_kind"]) for r in default] == [
+        (HEX_A, "out_of_sample"),
+        (HEX_B, "out_of_sample"),
+    ]
+    assert default[0]["forecast_from"] is None
+    assert default[0]["forecast_sites"] is None
+    assert len(forecast) == 1
+    assert forecast[0]["prediction_kind"] == "forecast"
+    assert forecast[0]["pred_median"] == 800.0
+    assert forecast[0]["forecast_from"] == "2024-09-01"
+    assert forecast[0]["forecast_sites"] == 5
+
+
+def test_nights_sums_one_kind_only(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setenv("HEATMAP_PREDICTIONS_SOURCE", "local")
+    base = tmp_path / "preds"
+    _write_mixed(base)
+    client = TestClient(app)
+
+    default = client.get(
+        "/api/occupancy/nights", params={"predictions_dir": str(base)}
+    ).json()
+    forecast = client.get(
+        "/api/occupancy/nights",
+        params={"predictions_dir": str(base), "kind": "forecast"},
+    ).json()
+
+    assert default["nights"] == [
+        {"night": "2024-09-02", "observed": 1391, "pred_median": 600.0, "n_hexes": 2}
+    ]
+    assert forecast["nights"] == [
+        {"night": "2024-09-02", "observed": 1292, "pred_median": 800.0, "n_hexes": 1}
+    ]
+
+
+def test_unknown_kind_is_rejected(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setenv("HEATMAP_PREDICTIONS_SOURCE", "local")
+    base = tmp_path / "preds"
+    _write_mixed(base)
+
+    resp = TestClient(app).get(
+        "/api/occupancy/predictions",
+        params={"predictions_dir": str(base), "kind": "in_sample"},
+    )
+
+    assert resp.status_code == 422

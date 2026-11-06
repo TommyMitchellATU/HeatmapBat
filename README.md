@@ -61,13 +61,14 @@ All routes are defined in a single FastAPI application.
 | `get_heatmap_points()` | `GET /api/heatmap/points` | Raw sample points (lat, lon, timestamp, raw_count). Supports `?start=&end=&points_object=`. Reads from DB, S3 GeoJSON, or S3 CSV depending on `HEATMAP_POINTS_SOURCE`. |
 | `get_heatmap_h3()` | `GET /api/heatmap/h3` | Real-time H3 aggregation from PostGIS. Supports `?start=&end=&resolution=7` (range 0–15). Bins samples into hexagons on every request. |
 | `get_heatmap_h3_parquet()` | `GET /api/heatmap/h3_parquet` | Pre-computed H3 from Parquet files. Supports `?start=&end=&analytics_dir=`. Reads from local filesystem or S3 depending on `HEATMAP_H3_SOURCE`. Includes hex polygon boundaries. |
+| `get_survey_windows()` | `GET /api/heatmap/survey_windows` | First and last day each hex has data in the same h3_daily Parquet, oldest first. Supports `?analytics_dir=`. Source as for `h3_parquet`. Drives the activity map's survey trail. |
 
 #### Occupancy (model vs reality)
 
 | Function | Route | Description |
 |----------|-------|-------------|
-| `get_occupancy_predictions()` | `GET /api/occupancy/predictions` | Observed vs M6-predicted bat activity per hex-night, from the notebook's section 15 export. Supports `?start=&end=&predictions_dir=` (nights, end exclusive). Local or S3 per `HEATMAP_PREDICTIONS_SOURCE`. Includes hex polygon boundaries. |
-| `get_occupancy_nights()` | `GET /api/occupancy/nights` | Every night with predictions plus observed / predicted totals. Returns `{nights, min_night, max_night}` for the model-mode timeline. |
+| `get_occupancy_predictions()` | `GET /api/occupancy/predictions` | Observed vs M6-predicted bat activity per hex-night, from the notebook's sections 15-17 export. Supports `?start=&end=&kind=&predictions_dir=` (nights, end exclusive; `kind` = `out_of_sample` (default) or `forecast`). Local or S3 per `HEATMAP_PREDICTIONS_SOURCE`. Includes hex polygon boundaries. |
+| `get_occupancy_nights()` | `GET /api/occupancy/nights` | Every night with predictions of one `kind` (default `out_of_sample`) plus observed / predicted totals. Returns `{nights, min_night, max_night}` for the model-mode timeline. |
 
 #### Timeline
 
@@ -98,7 +99,8 @@ All routes are defined in a single FastAPI application.
 | `HeatmapPoint` | `/api/heatmap/points` | `lat`, `lon`, `raw_count`, `effort_normalised_weight`, `timestamp_utc` |
 | `H3Cell` | `/api/heatmap/h3` | `h3_index`, `lat`, `lon`, `raw_count`, `effort_normalised_weight` |
 | `H3ParquetCell` | `/api/heatmap/h3_parquet` | `h3_index`, `lat`, `lon`, `raw_count_sum`, `sample_count`, `detector_nights`, `detections_per_night`, `polygon` |
-| `OccupancyPrediction` | `/api/occupancy/predictions` | `night`, `h3_index`, `observed`, `pred_mean`, `pred_median`, `pred_lo`, `pred_hi`, `pred_interval`, `n_detectors`, `prediction_kind`, `lat`, `lon`, `polygon` |
+| `SurveyWindow` | `/api/heatmap/survey_windows` | `h3_index`, `first_date`, `last_date`, `n_days`, `raw_count_sum`, `detector_nights`, `detections_per_night`, `lat`, `lon` |
+| `OccupancyPrediction` | `/api/occupancy/predictions` | `night`, `h3_index`, `observed`, `pred_mean`, `pred_median`, `pred_lo`, `pred_hi`, `pred_interval`, `n_detectors`, `prediction_kind`, `forecast_from`, `forecast_sites` (forecast rows only), `lat`, `lon`, `polygon` |
 | `OccupancyNight` | `/api/occupancy/nights` | `night`, `observed`, `pred_median` (sum of per-hex medians), `n_hexes` |
 | `OccupancyNightsResponse` | `/api/occupancy/nights` | `nights`, `min_night`, `max_night` |
 | `TimelineDateEntry` | `/api/timeline/dates` | `date`, `sample_count`, `total_detections` |
@@ -247,6 +249,7 @@ Single-page MapLibre app with client-side H3 re-aggregation.
 | `updateHexagonsForZoom()` | Called on `zoomend` — re-aggregates and re-renders hexagons at the new resolution |
 | `renderHexagons(data)` | Adds/updates the MapLibre fill + line layers for hexagon rendering |
 | `showPopup(lngLat, props)` | Displays a rich popup with detection count, sample count, activity level, and location |
+| `renderSurveyTrail(dateStr)` | Grey labelled hexagon markers at sites whose survey ended before the date (hidden when cumulative) |
 
 ### Test Suite (`backend/app/backend/tests/`)
 
@@ -256,7 +259,8 @@ Single-page MapLibre app with client-side H3 re-aggregation.
 | `test_timeline.py` | `/api/timeline/dates` response structure |
 | `test_heatmap_points_s3.py` | `/api/heatmap/points` in S3 mode |
 | `test_h3_parquet_s3.py` | `/api/heatmap/h3_parquet` in S3 mode |
-| `test_occupancy_predictions.py` | `/api/occupancy/*`: night filter, per-night sums, S3 mode, env precedence |
+| `test_survey_windows.py` | `/api/heatmap/survey_windows`: per-hex first/last day, totals, missing directory |
+| `test_occupancy_predictions.py` | `/api/occupancy/*`: night filter, per-night sums, `kind` filter, S3 mode, env precedence |
 | `test_heatmap_minio_shared_flag.py` | `HEATMAP_SOURCE=s3` shared flag behaviour |
 | `test_h3_analytics.py` | H3 analytics transform functions |
 | `test_export.py` | CSV/GeoJSON export correctness |
@@ -349,7 +353,7 @@ HEATMAP_SOURCE=s3
 
 #Or per-endpoint
 HEATMAP_POINTS_SOURCE=s3   # /api/heatmap/points
-HEATMAP_H3_SOURCE=s3       # /api/heatmap/h3_parquet
+HEATMAP_H3_SOURCE=s3       # /api/heatmap/h3_parquet, /api/heatmap/survey_windows
 HEATMAP_PREDICTIONS_SOURCE=s3  # /api/occupancy/*
 ```
 
@@ -462,15 +466,21 @@ CI runs two jobs:
 │               ├── test_detector_nightly.py
 │               ├── test_heatmap_points_s3.py
 │               ├── test_h3_parquet_s3.py
+│               ├── test_survey_windows.py
 │               └── test_heatmap_minio_shared_flag.py
 ├── data/
 │   ├── Summary Files/              # Detector summary files (*_Summary.txt); NA/, special/ flagged
 │   ├── exports/                    # CSV/GeoJSON outputs
 │   ├── analytics/h3_daily/         # Pre-computed H3 Parquet files (map)
 │   ├── analytics/detector_nightly/ # Night × site × detector surveys (occupancy models)
-│   └── analytics/occupancy_predictions/ # Observed vs M6-predicted counts per hex-night (written by the notebook)
-└── db/
-    └── init.sql                    # PostGIS extension + table schema
+│   ├── analytics/occupancy_predictions/ # Observed vs M6-predicted counts per hex-night, out-of-sample + forecast (written by the notebook)
+│   └── analytics/occupancy_simulation/  # M1 parameter-recovery results (written by occupancy_simulation.ipynb)
+├── db/
+│   └── init.sql                    # PostGIS extension + table schema
+├── occupancy_modeling.ipynb        # M1-M6 occupancy models on detector_nightly + forecast test + map export
+├── occupancy_simulation.ipynb      # Simulation study: how well M1 recovers psi and p vs number of sites
+├── occupancy_lib.py                # M1 likelihood + simulator shared by both notebooks
+└── notebook-requirements.txt       # Pinned notebook environment (uv pip install -r ...)
 ```
 
 ## Documentation
