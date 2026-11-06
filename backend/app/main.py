@@ -10,7 +10,7 @@ This file is the single entry point for the HeatmapBat API. It handles:
 
 2. DATA SOURCE RESOLUTION
    - Environment flags control whether data comes from DB, local files, or S3
-   - HEATMAP_SOURCE, HEATMAP_POINTS_SOURCE, HEATMAP_H3_SOURCE,
+   - HEATMAP_SOURCE, HEATMAP_POINTS_SOURCE, HEATMAP_ACTIVITY_SOURCE,
      HEATMAP_PREDICTIONS_SOURCE
 
 3. CACHING LAYER
@@ -20,15 +20,15 @@ This file is the single entry point for the HeatmapBat API. It handles:
 4. HEATMAP ENDPOINTS
    - /api/heatmap/points  → Raw sample points (for point-based heatmaps)
    - /api/heatmap/h3      → Real-time H3 aggregation from DB
-   - /api/heatmap/h3_parquet → Pre-computed H3 from Parquet files
-   - /api/heatmap/survey_windows → First/last day per hex (survey trail)
 
 5b. OCCUPANCY ENDPOINTS (model vs reality)
    - /api/occupancy/predictions → Observed vs M6-predicted activity per hex-night
    - /api/occupancy/nights      → Nights with predictions, for the timeline
 
-5. TIMELINE ENDPOINT
-   - /api/timeline/dates  → Per-day sample counts for timeline UI
+5. ACTIVITY ENDPOINTS (the activity map, from detector_nightly Parquet)
+   - /api/activity/hexes          → Per-hex totals over a night range
+   - /api/activity/nights         → Per-night totals for the timeline
+   - /api/activity/survey_windows → First/last night per hex (survey trail)
 
 6. STATIC FILE SERVING
    - /        → Main HTML page (MapLibre map)
@@ -138,31 +138,24 @@ def _set_cached_bytes(key: str, data: bytes) -> None:
 # DATA SOURCE RESOLUTION
 # The API can read data from three sources:
 #   - "db"    : Query PostgreSQL/PostGIS directly (default for points)
-#   - "local" : Read from local filesystem (default for H3 parquet)
+#   - "local" : Read from local filesystem (default for the Parquet routes)
 #   - "s3"    : Fetch from MinIO/S3 bucket
 #
 # Environment variables control which source is used:
-#   HEATMAP_SOURCE         - Shared override for both endpoints
-#   HEATMAP_POINTS_SOURCE  - Override for /api/heatmap/points only
-#   HEATMAP_H3_SOURCE      - Override for /api/heatmap/h3_parquet only
+#   HEATMAP_SOURCE             - Shared override for every route below
+#   HEATMAP_POINTS_SOURCE      - Override for /api/heatmap/points only
+#   HEATMAP_ACTIVITY_SOURCE    - Override for /api/activity/* only
 #   HEATMAP_PREDICTIONS_SOURCE - Override for /api/occupancy/* only
 
 
-def _resolve_source(point_var: str, hex_var: str) -> tuple[str, str]:
-    """Determine data sources for points and H3 endpoints.
-
-    Resolution order (first non-empty wins):
-      1. Per-endpoint env var (HEATMAP_POINTS_SOURCE or HEATMAP_H3_SOURCE)
-      2. Shared env var (HEATMAP_SOURCE)
-      3. Defaults: points="db", h3="local"
-
-    Returns:
-        Tuple of (points_source, h3_source), each one of "db", "local", "s3"
-    """
-    shared = os.environ.get("HEATMAP_SOURCE")
-    points_source = os.environ.get(point_var) or shared or "db"
-    h3_source = os.environ.get(hex_var) or shared or "local"
-    return points_source.lower(), h3_source.lower()
+def _resolve_points_source() -> str:
+    """Source for /api/heatmap/points: HEATMAP_POINTS_SOURCE, then HEATMAP_SOURCE, then "db"."""
+    source = (
+        os.environ.get("HEATMAP_POINTS_SOURCE")
+        or os.environ.get("HEATMAP_SOURCE")
+        or "db"
+    )
+    return source.lower()
 
 
 def _resolve_predictions_source() -> str:
@@ -175,8 +168,18 @@ def _resolve_predictions_source() -> str:
     return source.lower()
 
 
+def _resolve_activity_source() -> str:
+    """Source for /api/activity/*: HEATMAP_ACTIVITY_SOURCE, then HEATMAP_SOURCE, then "local"."""
+    source = (
+        os.environ.get("HEATMAP_ACTIVITY_SOURCE")
+        or os.environ.get("HEATMAP_SOURCE")
+        or "local"
+    )
+    return source.lower()
+
+
 # DAILY PARQUET LOADING
-# Shared by /api/heatmap/h3_parquet and /api/occupancy/*: one file per date,
+# Shared by /api/activity/* and /api/occupancy/*: one file per date,
 # named <file_prefix>YYYY-MM-DD.parquet, in a local directory or an S3 prefix.
 
 
@@ -271,11 +274,12 @@ def _hex_polygon(idx: str) -> list[tuple[float, float]]:
 @app.on_event("startup")
 def _ensure_bucket_on_startup() -> None:  # pragma: no cover
     """Create S3 bucket on startup if S3 mode is enabled."""
-    points_source, h3_source = _resolve_source(
-        "HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE"
+    sources = (
+        _resolve_points_source(),
+        _resolve_activity_source(),
+        _resolve_predictions_source(),
     )
-    predictions_source = _resolve_predictions_source()
-    if "s3" not in (points_source, h3_source, predictions_source):
+    if "s3" not in sources:
         return  # S3 not used, skip bucket check
     try:
         ensure_bucket_exists()
@@ -383,7 +387,7 @@ def get_heatmap_points(
     """
 
     # Determine data source from environment variables
-    source, _ = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
+    source = _resolve_points_source()
 
     # SOURCE: S3/MinIO - Fetch pre-exported GeoJSON or CSV
     if source == "s3":
@@ -491,7 +495,7 @@ def get_heatmap_points(
 
 # ENDPOINT: /api/heatmap/h3
 # Returns H3-binned aggregates computed on-the-fly from the database.
-# This is what the timeline UI uses - fewer features than raw points.
+# Fewer features than raw points; the map itself uses /api/activity/hexes.
 #
 # How H3 works:
 #   - The world is divided into hexagonal cells at different resolutions
@@ -518,34 +522,6 @@ class H3Cell(BaseModel):
     lon: float
     raw_count: float
     effort_normalised_weight: float
-
-
-class H3ParquetCell(BaseModel):
-    """H3 cell loaded from pre-computed Parquet analytics.
-
-    Similar to H3Cell but includes polygon boundary for rendering,
-    and uses different field names matching the ETL output.
-
-    Attributes:
-        h3_index: H3 cell identifier
-        lat, lon: Cell centroid (from h3.cell_to_latlng)
-        raw_count_sum: Total detections across all days loaded
-        sample_count: Number of individual recording sessions aggregated
-        detector_nights: Number of unique (site, date) pairs — proxy for
-            recording effort in this cell
-        detections_per_night: raw_count_sum / detector_nights — the
-            effort-normalised weight, comparable across cells
-        polygon: List of [lon, lat] pairs forming the hex boundary
-    """
-
-    h3_index: str
-    lat: float
-    lon: float
-    raw_count_sum: float
-    sample_count: int
-    detector_nights: int = 0
-    detections_per_night: float = 0.0
-    polygon: list[tuple[float, float]]
 
 
 @app.get("/api/heatmap/h3", response_model=List[H3Cell], tags=["heatmap"])
@@ -650,203 +626,242 @@ def get_heatmap_h3(
     return cells
 
 
-# ENDPOINT: /api/heatmap/h3_parquet
-# Returns H3 aggregates from pre-computed Parquet files (faster for large data).
-# The ETL pipeline generates these files: one per day, stored locally or in S3.
+# ENDPOINTS: /api/activity/hexes, /api/activity/nights, /api/activity/survey_windows
+# The activity map, read from the detector_nightly Parquet (one row per night x hex x
+# detector serial, noon-to-noon nights) and rolled up per request.
 
-_H3_DAILY_DIR = "/data/analytics/h3_daily"
-_H3_DAILY_PREFIX = "h3_analytics_"
+_ACTIVITY_DIR = "/data/analytics/detector_nightly"
+_ACTIVITY_PREFIX = "detector_nightly_"
 
 
-def _h3_daily_dir_query() -> Any:
-    """Shared analytics_dir query parameter for the h3_daily Parquet routes."""
+def _nightly_dir_query() -> Any:
+    """Shared nightly_dir query parameter for the /api/activity/* routes."""
     return Query(
-        _H3_DAILY_DIR,
+        _ACTIVITY_DIR,
         description=(
-            "Base directory (or S3 prefix when HEATMAP_H3_SOURCE=s3) "
-            "containing partitioned H3 analytics Parquet files."
+            "Directory (or S3 prefix when HEATMAP_ACTIVITY_SOURCE=s3) holding "
+            "detector_nightly_YYYY-MM-DD.parquet files."
         ),
     )
 
 
-@app.get(
-    "/api/heatmap/h3_parquet", response_model=List[H3ParquetCell], tags=["heatmap"]
-)
-def get_heatmap_h3_parquet(
-    start: Optional[date] = Query(
-        None,
-        description=(
-            "Inclusive lower bound on date (YYYY-MM-DD) for which analytics "
-            "should be loaded. If omitted, all available dates are included."
-        ),
-    ),
-    end: Optional[date] = Query(
-        None,
-        description=(
-            "Exclusive upper bound on date (YYYY-MM-DD). If omitted, all "
-            "available dates up to the latest are included."
-        ),
-    ),
-    analytics_dir: str = _h3_daily_dir_query(),
-) -> List[H3ParquetCell]:
-    """Serve H3 aggregates from pre-computed Parquet files.
-
-    Unlike /api/heatmap/h3, this endpoint reads from pre-computed analytics
-    rather than aggregating on every request. This is much faster for large
-    datasets and enables offline/batch processing pipelines.
-
-    File naming convention: h3_analytics_YYYY-MM-DD.parquet
-    Location: data/analytics/h3_daily/ (local) or S3 bucket prefix
-
-    Data source selection:
-        1. HEATMAP_H3_SOURCE env var (db, local, s3)
-        2. Falls back to HEATMAP_SOURCE
-        3. Default: local filesystem
-
-    Response includes hex polygon boundaries for client-side rendering.
-    """
-
-    # STEP 1: Load all matching Parquet files (local or S3, per HEATMAP_H3_SOURCE)
-    _, source = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
-    frames = _load_daily_parquet(analytics_dir, _H3_DAILY_PREFIX, start, end, source)
+def _load_detector_nightly(
+    nightly_dir: str, start: Optional[date] = None, end: Optional[date] = None
+) -> pd.DataFrame:
+    """Detector-night rows for nights in [start, end), with ``night`` as a date; empty if none."""
+    frames = _load_daily_parquet(
+        nightly_dir, _ACTIVITY_PREFIX, start, end, _resolve_activity_source()
+    )
     if not frames:
-        return []
-
-    # STEP 2: Concatenate and re-aggregate across dates
-    # Multiple days may have the same H3 cell - sum them together
+        return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
-    if df.empty:
-        return []
-
-    # Check whether the Parquet data includes effort columns (produced by
-    # the updated _aggregate transform).  Older Parquet files may lack them.
-    has_effort = "detector_nights" in df.columns
-
-    agg_spec: dict[str, tuple[str, str]] = {
-        "raw_count_sum": ("raw_count_sum", "sum"),
-        "sample_count": ("sample_count", "sum"),
-    }
-    if has_effort:
-        agg_spec["detector_nights"] = ("detector_nights", "sum")
-
-    grouped = df.groupby("h3_index", dropna=False).agg(**agg_spec).reset_index()
-
-    # Compute effort-normalised metric; fall back to raw sum when effort
-    # data is unavailable (legacy Parquet files).
-    if has_effort:
-        grouped["detections_per_night"] = (
-            grouped["raw_count_sum"] / grouped["detector_nights"].replace(0, 1)
-        ).round(2)
-    else:
-        grouped["detector_nights"] = 0
-        grouped["detections_per_night"] = grouped["raw_count_sum"]
-
-    # STEP 3: Add geometry (centroid + polygon boundary)
-    grouped[["lat", "lon"]] = grouped["h3_index"].apply(  # type: ignore[assignment]
-        lambda idx: pd.Series(_hex_centroid(idx)),
-    )
-    grouped["polygon"] = grouped["h3_index"].apply(_hex_polygon)
-
-    # STEP 4: Build response with full cell data
-    cells: List[H3ParquetCell] = []
-    for row in grouped.to_dict(orient="records"):
-        cells.append(
-            H3ParquetCell(
-                h3_index=row["h3_index"],
-                lat=float(row["lat"]),
-                lon=float(row["lon"]),
-                raw_count_sum=float(row["raw_count_sum"]),
-                sample_count=int(row["sample_count"]),
-                detector_nights=int(row.get("detector_nights", 0)),
-                detections_per_night=float(
-                    row.get("detections_per_night", row["raw_count_sum"])
-                ),
-                polygon=list(row["polygon"]),
-            )
-        )
-
-    return cells
+    df["night"] = pd.to_datetime(df["night"]).dt.date
+    return df
 
 
-# ENDPOINT: /api/heatmap/survey_windows
-# First and last day each hex has data, for the activity map's survey trail.
+# RULE: detector_nights is a ROW COUNT, which is only right because detector_nightly has exactly
+# one row per (night, h3_index, detector_serial). Summing sample_count or counting serials
+# instead would give minutes or detectors, not detector-nights. [doc: Detector-nightly analytics]
+_ACTIVITY_SUMS: dict[str, tuple[str, Any]] = {
+    "raw_count_sum": ("raw_count_sum", "sum"),
+    "sample_count": ("sample_count", "sum"),
+    "detector_nights": ("detector_serial", "size"),
+}
 
 
-class SurveyWindow(BaseModel):
-    """The days one hex was surveyed, from the same h3_daily Parquet as the activity map.
-
-    Assumes one deployment per hex (each res-10 hex is one wind farm x one
-    deployment window), so the window is simply its first to last day.
+class ActivityHex(BaseModel):
+    """One hex's bat activity summed over the requested nights.
 
     Attributes:
         h3_index: Site (resolution-10 H3 hex)
-        first_date, last_date: First and last day with data (inclusive)
-        n_days: Days with data inside the window
-        raw_count_sum: Total detections over the window
-        detector_nights: Summed detector-nights over the window
+        raw_count_sum: Detections (files recorded) over the nights
+        sample_count: 1-minute log rows over the nights (recording effort)
+        detector_nights: Detector x night surveys summed into raw_count_sum
+        n_detectors: Distinct detector serials seen
+        detections_per_night: raw_count_sum / detector_nights
+        lat, lon: Hex centre
+        polygon: Hex boundary as [lon, lat] pairs
+    """
+
+    h3_index: str
+    raw_count_sum: int
+    sample_count: int
+    detector_nights: int
+    n_detectors: int
+    detections_per_night: float
+    lat: float
+    lon: float
+    polygon: list[tuple[float, float]]
+
+
+class ActivityNight(BaseModel):
+    """One night's activity summed over every hex surveyed that night (timeline sparkline)."""
+
+    night: date
+    raw_count_sum: int
+    sample_count: int
+    detector_nights: int
+    n_hexes: int
+
+
+class ActivityNightsResponse(BaseModel):
+    """All nights with data, plus the range for the slider bounds."""
+
+    nights: List[ActivityNight]
+    min_night: Optional[date]
+    max_night: Optional[date]
+
+
+class ActivitySurveyWindow(BaseModel):
+    """The nights one hex was surveyed.
+
+    Assumes one deployment per hex (each res-10 hex is one wind farm x one
+    deployment window), so the window is simply its first to last night.
+
+    Attributes:
+        h3_index: Site (resolution-10 H3 hex)
+        first_night, last_night: First and last night with data (inclusive)
+        n_nights: Nights with data inside the window
+        raw_count_sum: Detections over the window
+        detector_nights: Detector x night surveys over the window
         detections_per_night: raw_count_sum / detector_nights
         lat, lon: Hex centre
     """
 
     h3_index: str
-    first_date: date
-    last_date: date
-    n_days: int
-    raw_count_sum: float
+    first_night: date
+    last_night: date
+    n_nights: int
+    raw_count_sum: int
     detector_nights: int
     detections_per_night: float
     lat: float
     lon: float
 
 
-@app.get(
-    "/api/heatmap/survey_windows",
-    response_model=List[SurveyWindow],
-    tags=["heatmap"],
-)
-def get_survey_windows(
-    analytics_dir: str = _h3_daily_dir_query(),
-) -> List[SurveyWindow]:
-    """Every hex's survey window (first to last day with data), oldest first.
+@app.get("/api/activity/hexes", response_model=List[ActivityHex], tags=["activity"])
+def get_activity_hexes(
+    start: Optional[date] = Query(
+        None, description="First night (YYYY-MM-DD, inclusive); omit for all."
+    ),
+    end: Optional[date] = Query(
+        None, description="Night after the last one (exclusive); omit for all."
+    ),
+    nightly_dir: str = _nightly_dir_query(),
+) -> List[ActivityHex]:
+    """Per-hex activity summed over the nights in [start, end), at resolution 10.
 
-    Reads all h3_daily files, so the dates match what /api/heatmap/h3_parquet
-    draws. Source: HEATMAP_H3_SOURCE, then HEATMAP_SOURCE, then local files.
+    The map coarsens these to its zoom level client-side. A night runs noon to
+    noon and is labelled by its start date.
     """
-    _, source = _resolve_source("HEATMAP_POINTS_SOURCE", "HEATMAP_H3_SOURCE")
-    frames = _load_daily_parquet(analytics_dir, _H3_DAILY_PREFIX, None, None, source)
-    if not frames:
+    df = _load_detector_nightly(nightly_dir, start, end)
+    if df.empty:
         return []
-    df = pd.concat(frames, ignore_index=True)
-    df["day"] = pd.to_datetime(df["time_bin_start"]).dt.date
+
+    grouped = (
+        df.groupby("h3_index")
+        .agg(**_ACTIVITY_SUMS, n_detectors=("detector_serial", "nunique"))
+        .reset_index()
+    )
+
+    cells: List[ActivityHex] = []
+    for row in grouped.to_dict(orient="records"):
+        lat, lon = _hex_centroid(row["h3_index"])
+        nights = int(row["detector_nights"])
+        cells.append(
+            ActivityHex(
+                h3_index=row["h3_index"],
+                raw_count_sum=int(row["raw_count_sum"]),
+                sample_count=int(row["sample_count"]),
+                detector_nights=nights,
+                n_detectors=int(row["n_detectors"]),
+                detections_per_night=round(row["raw_count_sum"] / max(nights, 1), 2),
+                lat=lat,
+                lon=lon,
+                polygon=_hex_polygon(row["h3_index"]),
+            )
+        )
+    return cells
+
+
+@app.get(
+    "/api/activity/nights",
+    response_model=ActivityNightsResponse,
+    tags=["activity"],
+)
+def get_activity_nights(
+    nightly_dir: str = _nightly_dir_query(),
+) -> ActivityNightsResponse:
+    """Every night with data, oldest first, with totals across its hexes.
+
+    The activity timeline uses this for its slider steps and sparkline.
+    """
+    df = _load_detector_nightly(nightly_dir)
+    if df.empty:
+        return ActivityNightsResponse(nights=[], min_night=None, max_night=None)
+
+    per_night = (
+        df.groupby("night")
+        .agg(**_ACTIVITY_SUMS, n_hexes=("h3_index", "nunique"))
+        .reset_index()
+        .sort_values("night")
+    )
+    nights = [
+        ActivityNight(
+            night=row["night"],
+            raw_count_sum=int(row["raw_count_sum"]),
+            sample_count=int(row["sample_count"]),
+            detector_nights=int(row["detector_nights"]),
+            n_hexes=int(row["n_hexes"]),
+        )
+        for row in per_night.to_dict(orient="records")
+    ]
+    return ActivityNightsResponse(
+        nights=nights, min_night=nights[0].night, max_night=nights[-1].night
+    )
+
+
+@app.get(
+    "/api/activity/survey_windows",
+    response_model=List[ActivitySurveyWindow],
+    tags=["activity"],
+)
+def get_activity_survey_windows(
+    nightly_dir: str = _nightly_dir_query(),
+) -> List[ActivitySurveyWindow]:
+    """Every hex's survey window (first to last night with data), oldest first.
+
+    Drives the activity map's grey trail of finished surveys.
+    """
+    df = _load_detector_nightly(nightly_dir)
+    if df.empty:
+        return []
 
     windows = (
         df.groupby("h3_index")
         .agg(
-            first_date=("day", "min"),
-            last_date=("day", "max"),
-            n_days=("day", "nunique"),
-            raw_count_sum=("raw_count_sum", "sum"),
-            detector_nights=("detector_nights", "sum"),
+            **_ACTIVITY_SUMS,
+            first_night=("night", "min"),
+            last_night=("night", "max"),
+            n_nights=("night", "nunique"),
         )
         .reset_index()
-        .sort_values(["first_date", "h3_index"])
+        .sort_values(["first_night", "h3_index"])
     )
 
-    rows: List[SurveyWindow] = []
+    rows: List[ActivitySurveyWindow] = []
     for row in windows.to_dict(orient="records"):
         lat, lon = _hex_centroid(row["h3_index"])
         nights = int(row["detector_nights"])
         rows.append(
-            SurveyWindow(
+            ActivitySurveyWindow(
                 h3_index=row["h3_index"],
-                first_date=row["first_date"],
-                last_date=row["last_date"],
-                n_days=int(row["n_days"]),
-                raw_count_sum=float(row["raw_count_sum"]),
+                first_night=row["first_night"],
+                last_night=row["last_night"],
+                n_nights=int(row["n_nights"]),
+                raw_count_sum=int(row["raw_count_sum"]),
                 detector_nights=nights,
-                detections_per_night=round(
-                    float(row["raw_count_sum"]) / max(nights, 1), 2
-                ),
+                detections_per_night=round(row["raw_count_sum"] / max(nights, 1), 2),
                 lat=lat,
                 lon=lon,
             )
@@ -1065,91 +1080,6 @@ def get_occupancy_nights(
     )
 
 
-# ENDPOINT: /api/timeline/dates
-# Provides date-level statistics for the timeline UI component.
-# The frontend uses this to render a sparkline showing activity over time.
-
-
-class TimelineDateEntry(BaseModel):
-    """A single date entry for the timeline sparkline.
-
-    Attributes:
-        date: Calendar date (YYYY-MM-DD)
-        sample_count: Number of distinct sample records on this date
-        total_detections: Sum of all detection counts for this date
-    """
-
-    date: date
-    sample_count: int
-    total_detections: int
-
-
-class TimelineResponse(BaseModel):
-    """Response wrapper for timeline data.
-
-    Includes the full list of dates plus convenience fields for
-    the min/max range (useful for initializing slider bounds).
-    """
-
-    dates: List[TimelineDateEntry]
-    min_date: Optional[date]
-    max_date: Optional[date]
-
-
-@app.get("/api/timeline/dates", response_model=TimelineResponse, tags=["timeline"])
-def get_timeline_dates(db: Session = Depends(get_db)) -> TimelineResponse:
-    """Return per-day statistics for the timeline slider.
-
-    Aggregates all samples by date to show:
-    - How many distinct sample records exist per day
-    - Total detection count per day (sum of files_count)
-
-    The frontend uses this to:
-    1. Set the date range slider bounds (min_date → max_date)
-    2. Display an activity sparkline (sample_count per day)
-    3. Enable users to filter the heatmap by date range
-
-    Performance: Single SQL GROUP BY query, executed fresh each time.
-    For large datasets, consider caching or pre-aggregating.
-    """
-    from sqlalchemy import cast, Date, func
-
-    # SQL: Group samples by date and count
-    stmt = (
-        select(
-            cast(MaugSummarySample.timestamp_utc, Date).label("date"),
-            func.count().label("sample_count"),
-            func.coalesce(func.sum(MaugSummarySample.files_count), 0).label(
-                "total_detections"
-            ),
-        )
-        .group_by(cast(MaugSummarySample.timestamp_utc, Date))
-        .order_by(cast(MaugSummarySample.timestamp_utc, Date))
-    )
-
-    results = db.execute(stmt).all()
-
-    # Handle empty database
-    if not results:
-        return TimelineResponse(dates=[], min_date=None, max_date=None)
-
-    # Convert rows to response model
-    dates = [
-        TimelineDateEntry(
-            date=row.date,
-            sample_count=row.sample_count,
-            total_detections=row.total_detections,
-        )
-        for row in results
-    ]
-
-    return TimelineResponse(
-        dates=dates,
-        min_date=dates[0].date,  # Already sorted, so first is min
-        max_date=dates[-1].date,  # Last is max
-    )
-
-
 # STATIC FILE SERVING
 # The frontend is a single-page app (SPA) that loads from index.html and
 # makes API calls to the endpoints above. Static assets are served here.
@@ -1161,8 +1091,8 @@ def index() -> Any:
 
     Returns the index.html file which bootstraps the MapLibre-based
     frontend application. The HTML loads JavaScript that:
-    1. Fetches /api/timeline/dates for the date slider
-    2. Fetches /api/heatmap/points for raw data
+    1. Fetches /api/activity/nights for the night slider
+    2. Fetches /api/activity/hexes for the res-10 hexes in a night range
     3. Re-aggregates client-side using h3-js for smooth zoom
     """
 

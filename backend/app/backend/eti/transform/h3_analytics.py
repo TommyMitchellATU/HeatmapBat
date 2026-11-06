@@ -8,6 +8,9 @@ The goal is to keep heavy analytics work in an ETL/ETI transform stage rather
 than in request/response handlers.
 """
 
+# UNFINISHED: nothing reads h3_daily since the map moved to /api/activity/* (detector_nightly);
+# kept until the owner has tested that switch, then this module and its outputs can go.
+
 from __future__ import annotations
 
 from dataclasses import dataclass
