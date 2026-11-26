@@ -24,6 +24,7 @@ This file is the single entry point for the HeatmapBat API. It handles:
 5b. OCCUPANCY ENDPOINTS (model vs reality)
    - /api/occupancy/predictions → Observed vs M6-predicted activity per hex-night
    - /api/occupancy/nights      → Nights with predictions, for the timeline
+   - /api/occupancy/detection_curve → M2 detection probability by night
 
 5. ACTIVITY ENDPOINTS (the activity map, from detector_nightly Parquet)
    - /api/activity/hexes          → Per-hex totals over a night range
@@ -203,6 +204,29 @@ def _in_range(file_date: date, start: Optional[date], end: Optional[date]) -> bo
     return True
 
 
+def _fetch_s3_bytes(key: str) -> bytes:
+    """Object bytes for an S3 key, through the 5-minute cache; 503 if storage fails."""
+    cached = _get_cached_bytes(key)
+    if cached is None:
+        try:
+            cached = get_object_bytes(key)
+        except Exception as exc:  # pragma: no cover - network failure path
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to fetch analytics object from storage",
+            ) from exc
+        _set_cached_bytes(key, cached)
+    return cached
+
+
+def _load_parquet_file(path: str, source: str) -> Optional[pd.DataFrame]:
+    """One Parquet file from a local path or an S3 key; None if a local file is missing."""
+    if source == "s3":
+        return pd.read_parquet(BytesIO(_fetch_s3_bytes(path)))
+    local = Path(path)
+    return pd.read_parquet(local) if local.exists() else None
+
+
 def _load_daily_parquet(
     base_dir: str,
     file_prefix: str,
@@ -230,17 +254,7 @@ def _load_daily_parquet(
             file_date = _file_date(os.path.basename(key), file_prefix)
             if file_date is None or not _in_range(file_date, start, end):
                 continue
-            cached = _get_cached_bytes(key)
-            if cached is None:
-                try:
-                    cached = get_object_bytes(key)
-                except Exception as exc:  # pragma: no cover - network failure path
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Unable to fetch analytics object from storage",
-                    ) from exc
-                _set_cached_bytes(key, cached)
-            frames.append(pd.read_parquet(BytesIO(cached)))
+            frames.append(pd.read_parquet(BytesIO(_fetch_s3_bytes(key))))
         return frames
 
     base = Path(base_dir)
@@ -1078,6 +1092,88 @@ def get_occupancy_nights(
     return OccupancyNightsResponse(
         nights=nights, min_night=nights[0].night, max_night=nights[-1].night
     )
+
+
+# ENDPOINT: /api/occupancy/detection_curve
+# M2 detection probability by night, exported by occupancy_modeling.ipynb section 18.
+
+_CURVE_PATH = "/data/analytics/occupancy_curves/detection_curve.parquet"
+
+
+class DetectionCurvePoint(BaseModel):
+    """M2 detection probability and the observed detection rate for one night.
+
+    Attributes:
+        night: Noon-to-noon night, labelled by its start date
+        doy: Day of year of night
+        p_mean, p_median: Posterior mean / median of p, averaged over the
+            detector random effect, at an average-length night
+        p_lo, p_hi: Central `interval` credible band of p (curve uncertainty,
+            not night-to-night scatter)
+        interval: Band width, e.g. 0.9 for the 5th to 95th percentile
+        n_surveys: Detector-nights surveyed (0 = no survey that night)
+        n_detected: Of those, how many recorded at least one pass
+        observed_rate: n_detected / n_surveys; None when nothing was surveyed
+        rate_lo, rate_hi: Central `interval` posterior predictive range of
+            observed_rate for that night's n_surveys fresh detectors; None
+            when nothing was surveyed. Compare observed_rate with this, not
+            with p_lo / p_hi
+    """
+
+    night: date
+    doy: int
+    p_mean: float
+    p_median: float
+    p_lo: float
+    p_hi: float
+    interval: float
+    n_surveys: int
+    n_detected: int
+    observed_rate: Optional[float] = None
+    rate_lo: Optional[float] = None
+    rate_hi: Optional[float] = None
+
+
+@app.get(
+    "/api/occupancy/detection_curve",
+    response_model=List[DetectionCurvePoint],
+    tags=["occupancy"],
+)
+def get_detection_curve(
+    curve_path: str = Query(
+        _CURVE_PATH,
+        description=(
+            "Parquet file (or S3 key when HEATMAP_PREDICTIONS_SOURCE=s3) "
+            "written by occupancy_modeling.ipynb section 18."
+        ),
+    ),
+) -> List[DetectionCurvePoint]:
+    """M2 detection probability per night across the season, with each night's observed rate.
+
+    Every calendar night from the first surveyed night to the last, oldest
+    first; empty if the file is missing locally. Same source switch as the
+    other /api/occupancy routes.
+    """
+    df = _load_parquet_file(curve_path, _resolve_predictions_source())
+    if df is None or df.empty:
+        return []
+    return [
+        DetectionCurvePoint(
+            night=row["night"],
+            doy=int(row["doy"]),
+            p_mean=float(row["p_mean"]),
+            p_median=float(row["p_median"]),
+            p_lo=float(row["p_lo"]),
+            p_hi=float(row["p_hi"]),
+            interval=float(row["interval"]),
+            n_surveys=int(row["n_surveys"]),
+            n_detected=int(row["n_detected"]),
+            observed_rate=_optional(row["observed_rate"]),
+            rate_lo=_optional(row.get("rate_lo")),
+            rate_hi=_optional(row.get("rate_hi")),
+        )
+        for row in df.sort_values("night").to_dict(orient="records")
+    ]
 
 
 # STATIC FILE SERVING

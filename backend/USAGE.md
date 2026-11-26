@@ -146,7 +146,7 @@ Or per-endpoint:
 ```bash
 HEATMAP_POINTS_SOURCE=s3   # /api/heatmap/points
 HEATMAP_ACTIVITY_SOURCE=s3 # /api/activity/*
-HEATMAP_PREDICTIONS_SOURCE=s3  # /api/occupancy/predictions, /api/occupancy/nights
+HEATMAP_PREDICTIONS_SOURCE=s3  # /api/occupancy/* (predictions, nights, detection_curve)
 ```
 
 ### Restart API to apply changes
@@ -220,6 +220,14 @@ curl "http://localhost:8000/api/occupancy/nights"
 ```
 Files: `data/analytics/occupancy_predictions/occupancy_predictions_YYYY-MM-DD.parquet`, written by
 `occupancy_modeling.ipynb` section 15. Re-run the notebook to regenerate them.
+
+### Get the detection-probability curve (M2)
+```bash
+# Every night from the first surveyed to the last: p band + observed detection rate
+curl "http://localhost:8000/api/occupancy/detection_curve"
+```
+File: `data/analytics/occupancy_curves/detection_curve.parquet`, written by `occupancy_modeling.ipynb`
+section 18. In S3 mode pass `?curve_path=<key>`.
 
 ---
 

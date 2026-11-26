@@ -67,6 +67,7 @@ All routes are defined in a single FastAPI application.
 |----------|-------|-------------|
 | `get_occupancy_predictions()` | `GET /api/occupancy/predictions` | Observed vs M6-predicted bat activity per hex-night, from the notebook's sections 15-17 export. Supports `?start=&end=&kind=&predictions_dir=` (nights, end exclusive; `kind` = `out_of_sample` (default) or `forecast`). Local or S3 per `HEATMAP_PREDICTIONS_SOURCE`. Includes hex polygon boundaries. |
 | `get_occupancy_nights()` | `GET /api/occupancy/nights` | Every night with predictions of one `kind` (default `out_of_sample`) plus observed / predicted totals. Returns `{nights, min_night, max_night}` for the model-mode timeline. |
+| `get_detection_curve()` | `GET /api/occupancy/detection_curve` | M2 detection probability per night (averaged over detectors, credible band) with each night's observed detection rate; from `occupancy_modeling.ipynb` section 18. |
 
 #### Activity (the activity map, from `data/analytics/detector_nightly/`)
 
@@ -107,6 +108,7 @@ Nights run noon to noon and are labelled by their start date. Local or S3 per `H
 | `OccupancyPrediction` | `/api/occupancy/predictions` | `night`, `h3_index`, `observed`, `pred_mean`, `pred_median`, `pred_lo`, `pred_hi`, `pred_interval`, `n_detectors`, `prediction_kind`, `forecast_from`, `forecast_sites` (forecast rows only), `lat`, `lon`, `polygon` |
 | `OccupancyNight` | `/api/occupancy/nights` | `night`, `observed`, `pred_median` (sum of per-hex medians), `n_hexes` |
 | `OccupancyNightsResponse` | `/api/occupancy/nights` | `nights`, `min_night`, `max_night` |
+| `DetectionCurvePoint` | `/api/occupancy/detection_curve` | `night`, `doy`, `p_mean`, `p_median`, `p_lo`, `p_hi`, `interval`, `n_surveys`, `n_detected`, `observed_rate` (null when not surveyed) |
 
 ### ORM Model (`backend/app/backend/eti/models.py`)
 
@@ -252,6 +254,9 @@ Single-page MapLibre app with client-side H3 re-aggregation.
 | `renderHexagons(data)` | Adds/updates the MapLibre fill + line layers for hexagon rendering |
 | `showPopup(lngLat, props)` | Popup with detections, detections per detector-night, its colour tier, detector-nights, samples, and location |
 | `renderSurveyTrail(dateStr)` | Grey labelled hexagon markers at sites whose survey ended before the date (hidden when cumulative) |
+| `openSeasonPanel(cell)` / `renderSeasonPanel()` | Model vs reality: side panel opened by clicking a cell, with `Activity` / `Detection` tabs; redrawn as the timeline moves |
+| `seasonChartSvg(rows, night)` | Activity tab SVG: a site's nights, 90% predicted band, median, observed dots (red outside the band), log scale |
+| `detectionChartSvg(curve, siteWindow, night)` | Detection tab SVG: M2 p over the season with credible band, nightly observed rate dots, clicked site's survey shaded |
 
 ### Test Suite (`backend/app/backend/tests/`)
 

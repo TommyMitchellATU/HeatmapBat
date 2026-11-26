@@ -364,6 +364,105 @@
         padding: 0 2px;
       }
 
+      /* Season chart side panel (Model vs reality) */
+      .season-panel {
+        position: absolute;
+        right: 10px;
+        bottom: 30px;
+        width: 380px;
+        max-width: calc(100% - 20px);
+        box-sizing: border-box;
+        background: white;
+        padding: 12px 14px;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        font-size: 12px;
+        color: #1e3a5f;
+        z-index: 1000;
+      }
+
+      .season-panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 6px;
+      }
+
+      .season-panel-header h3 {
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .season-panel-header .subtitle {
+        font-size: 11px;
+        color: #6b7280;
+      }
+
+      .season-panel-close {
+        border: none;
+        background: none;
+        font-size: 18px;
+        line-height: 1;
+        color: #6b7280;
+        cursor: pointer;
+      }
+
+      .season-panel-tabs {
+        display: inline-flex;
+        margin-bottom: 6px;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .season-panel-tabs button {
+        border: none;
+        background: white;
+        color: #374151;
+        padding: 3px 10px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      .season-panel-tabs button.active {
+        background: #1e3a5f;
+        color: white;
+      }
+
+      .season-panel svg {
+        width: 100%;
+        height: auto;
+        display: block;
+      }
+
+      .season-panel-key {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        margin: 4px 0 6px;
+        font-size: 11px;
+        color: #374151;
+      }
+
+      /* RULE: keep the key swatches at their own size - `.season-panel svg` stretches every SVG in the panel to full width. */
+      .season-panel-key svg {
+        width: 14px;
+        height: 10px;
+        flex: none;
+      }
+
+      .season-panel-key span {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .season-panel-note {
+        font-size: 11px;
+        color: #4b5563;
+        line-height: 1.5;
+      }
+
       /* Popup styling */
       .maplibregl-popup {
         max-width: 320px;
@@ -474,6 +573,20 @@
         </div>
       </header>
       <div id="map">
+        <div class="season-panel" id="season-panel" style="display: none;">
+          <div class="season-panel-header">
+            <div>
+              <h3 id="season-panel-title">Survey site</h3>
+              <div class="subtitle" id="season-panel-subtitle"></div>
+            </div>
+            <button type="button" class="season-panel-close" id="season-panel-close" title="Close">&times;</button>
+          </div>
+          <div class="season-panel-tabs" id="season-panel-tabs" role="group" aria-label="Panel chart">
+            <button type="button" class="active" data-tab="activity">Activity</button>
+            <button type="button" data-tab="detection">Detection</button>
+          </div>
+          <div id="season-panel-body"></div>
+        </div>
         <div class="map-legend">
           <div id="legend-model" style="display: none;">
             <h4 id="legend-model-title">Observed vs predicted</h4>
@@ -757,6 +870,7 @@
         modelViewToggle.style.display = mode === "model" ? "" : "none";
         setLayersVisible(ACTIVITY_LAYER_IDS, mode === "activity");
         setLayersVisible(MODEL_LAYER_IDS, mode === "model");
+        if (mode !== "model") closeSeasonPanel();
 
         if (!setupTimeline()) return;
         await goToDate(nearestDateIndex(currentDate));
@@ -1422,7 +1536,10 @@
         applyModelViewStyle();
 
         map.on("click", "model-fill", (e) => {
-          if (e.features.length) showModelPopup(e.lngLat, e.features[0].properties.h3_index);
+          if (!e.features.length) return;
+          const h3Index = e.features[0].properties.h3_index;
+          showModelPopup(e.lngLat, h3Index);
+          openSeasonPanel(modelCellsShown.get(h3Index));
         });
         map.on("mouseenter", "model-fill", () => { map.getCanvas().style.cursor = "pointer"; });
         map.on("mouseleave", "model-fill", () => { map.getCanvas().style.cursor = ""; });
@@ -1564,6 +1681,7 @@
         const siteFeatures = [...unsurveyedCells].map(idx => modelCellFeature(idx, { h3_index: idx }));
         map.getSource("model-night").setData({ type: "FeatureCollection", features: nightFeatures });
         map.getSource("model-sites").setData({ type: "FeatureCollection", features: siteFeatures });
+        renderSeasonPanel();
 
         if (isCumulative) {
           const observed = rows.reduce((acc, r) => acc + r.observed, 0);
@@ -1578,7 +1696,362 @@
           (bandPct != null ? `, ${outside} outside the ${bandPct}% band` : "");
       }
 
+      // ===== SEASON CHART PANEL =====
+      /** Chart size in SVG units; the SVG scales to the panel width. */
+      const SEASON_CHART_WIDTH = 360;
+      const SEASON_CHART_HEIGHT = 200;
+      /** Room for the axis labels around the plot area, in SVG units. */
+      const SEASON_CHART_MARGIN = { top: 10, right: 12, bottom: 24, left: 44 };
+      /** Added to every count before the log, so nights with 0 passes can be plotted. */
+      const SEASON_CHART_LOG_OFFSET = 1;
+      /** Radius of each observed-night dot, in SVG units. */
+      const SEASON_CHART_DOT_RADIUS = 3.5;
+      /** Most date labels drawn on the x-axis. */
+      const SEASON_CHART_MAX_X_LABELS = 5;
+      /** Colours of the band, median line, dots inside / outside the band, current-night marker and survey-window shading. */
+      const SEASON_CHART_COLORS = {
+        band: "#bfdbfe", median: "#1d4ed8", inside: "#1e3a5f", outside: "#b91c1c", current: "#10b981", surveyWindow: "#fde68a",
+        whisker: "#9ca3af",
+      };
+      /** Width in SVG units of each night's predictive-range bar on the detection chart. */
+      const DETECTION_CHART_WHISKER_PX = 1.5;
+      /** Detection chart y-axis: gridline spacing, and the step its lower bound is rounded down to (top is always 1). */
+      const DETECTION_CHART_Y_STEP = 0.1;
+      const DAY_MS = 86400000;
+
+      let seasonPanelHex = null;       // h3_index of the clicked site; null for a multi-site cell or when closed
+      let seasonPanelSiteCount = 0;    // sites in the clicked cell; 0 when the panel is closed
+      let seasonPanelTab = "activity"; // "activity" | "detection"
+      let detectionCurve = null;       // rows from /api/occupancy/detection_curve, fetched on first use
+      let detectionCurveRequest = null; // the in-flight fetch, so tab clicks during loading do not refetch
+      const seasonPanelEl = document.getElementById("season-panel");
+      const seasonPanelTabs = document.querySelectorAll("#season-panel-tabs button");
+
+      /** Opens the panel for a clicked model cell, keeping the tab that was last chosen. */
+      function openSeasonPanel(cell) {
+        if (!cell) return;
+        seasonPanelSiteCount = cell.n_sites;
+        seasonPanelHex = cell.n_sites === 1 ? cell.rows[0].h3_index : null;
+        seasonPanelEl.style.display = "";
+        renderSeasonPanel();
+      }
+
+      /** Hides the panel and forgets the clicked cell. */
+      function closeSeasonPanel() {
+        seasonPanelHex = null;
+        seasonPanelSiteCount = 0;
+        seasonPanelEl.style.display = "none";
+      }
+
+      /** Every prediction row for one hex, oldest night first. */
+      function hexSeasonRows(h3Index) {
+        const rows = [];
+        for (const nightRows of modelByNight.values()) {
+          for (const r of nightRows) if (r.h3_index === h3Index) rows.push(r);
+        }
+        return rows.sort((a, b) => a.night.localeCompare(b.night));
+      }
+
+      /** Splits night-sorted rows into runs of consecutive nights, so the band is not drawn across a gap. */
+      function consecutiveRuns(rows) {
+        const runs = [];
+        for (const r of rows) {
+          const prev = runs.at(-1)?.at(-1);
+          if (prev && Date.parse(r.night) - Date.parse(prev.night) === DAY_MS) runs.at(-1).push(r);
+          else runs.push([r]);
+        }
+        return runs;
+      }
+
+      /** True when the observed total lies inside the row's predicted band. */
+      function insideBand(r) {
+        return r.observed >= r.pred_lo && r.observed <= r.pred_hi;
+      }
+
+      /**
+       * Plot area and x-scale shared by both panel charts. X spans rows' first to last night,
+       * padded a day either side when there is only one.
+       */
+      function chartFrame(rows) {
+        const { top, right, bottom, left } = SEASON_CHART_MARGIN;
+        const plotW = SEASON_CHART_WIDTH - left - right;
+        const plotH = SEASON_CHART_HEIGHT - top - bottom;
+        let x0 = Date.parse(rows[0].night);
+        let x1 = Date.parse(rows.at(-1).night);
+        if (x0 === x1) { x0 -= DAY_MS; x1 += DAY_MS; }
+        const xAt = (night) => left + ((Date.parse(night) - x0) / (x1 - x0)) * plotW;
+        return { top, left, plotW, plotH, xAt, x0, x1 };
+      }
+
+      /** Horizontal gridline and left label for each y tick. */
+      function yTickParts(frame, ticks, yAt, label) {
+        return ticks.flatMap(t => {
+          const y = yAt(t).toFixed(1);
+          return [
+            `<line x1="${frame.left}" x2="${frame.left + frame.plotW}" y1="${y}" y2="${y}" stroke="#e5e7eb"/>`,
+            `<text x="${frame.left - 6}" y="${y}" text-anchor="end" dominant-baseline="middle" font-size="10" fill="#6b7280">${label(t)}</text>`,
+          ];
+        });
+      }
+
+      /** Up to SEASON_CHART_MAX_X_LABELS date labels, evenly spaced across rows' nights. */
+      function xLabelParts(frame, rows) {
+        const parts = [];
+        const nLabels = Math.min(SEASON_CHART_MAX_X_LABELS, rows.length);
+        for (let i = 0; i < nLabels; i++) {
+          const r = rows[nLabels === 1 ? 0 : Math.round((i * (rows.length - 1)) / (nLabels - 1))];
+          // First and last labels hug the plot edges so they are not clipped.
+          const anchor = nLabels === 1 ? "middle" : i === 0 ? "start" : i === nLabels - 1 ? "end" : "middle";
+          parts.push(`<text x="${frame.xAt(r.night).toFixed(1)}" y="${SEASON_CHART_HEIGHT - 6}" text-anchor="${anchor}" font-size="10" fill="#6b7280">${formatDateShort(r.night)}</text>`);
+        }
+        return parts;
+      }
+
+      /** Vertical line at the timeline's night, or nothing when that night is off the chart. */
+      function currentNightParts(frame, night) {
+        const t = night ? Date.parse(night) : NaN;
+        if (!(t >= frame.x0 && t <= frame.x1)) return [];
+        const x = frame.xAt(night).toFixed(1);
+        return [`<line x1="${x}" x2="${x}" y1="${frame.top}" y2="${frame.top + frame.plotH}" stroke="${SEASON_CHART_COLORS.current}" stroke-width="2"/>`];
+      }
+
+      /** Axis lines and the rotated y-axis title. */
+      function axisParts(frame, yTitle) {
+        const { top, left, plotW, plotH } = frame;
+        return [
+          `<line x1="${left}" x2="${left}" y1="${top}" y2="${top + plotH}" stroke="#9ca3af"/>`,
+          `<line x1="${left}" x2="${left + plotW}" y1="${top + plotH}" y2="${top + plotH}" stroke="#9ca3af"/>`,
+          `<text x="10" y="${top + plotH / 2}" transform="rotate(-90 10 ${top + plotH / 2})" text-anchor="middle" font-size="10" fill="#6b7280">${yTitle}</text>`,
+        ];
+      }
+
+      /** The scaled SVG element around a chart's parts. */
+      function chartSvg(parts, ariaLabel) {
+        return `<svg viewBox="0 0 ${SEASON_CHART_WIDTH} ${SEASON_CHART_HEIGHT}" role="img" aria-label="${ariaLabel}">${parts.join("")}</svg>`;
+      }
+
+      /** Band polygon between lo / hi, or a short bar for a single night. */
+      function bandPart(frame, run, yAt, lo, hi) {
+        if (run.length === 1) {
+          const x = frame.xAt(run[0].night).toFixed(1);
+          return `<line x1="${x}" x2="${x}" y1="${yAt(lo(run[0]))}" y2="${yAt(hi(run[0]))}" stroke="${SEASON_CHART_COLORS.band}" stroke-width="6"/>`;
+        }
+        const pt = (r, v) => `${frame.xAt(r.night).toFixed(1)},${yAt(v).toFixed(1)}`;
+        const upper = run.map(r => pt(r, hi(r)));
+        const lower = [...run].reverse().map(r => pt(r, lo(r)));
+        return `<polygon points="${[...upper, ...lower].join(" ")}" fill="${SEASON_CHART_COLORS.band}"/>`;
+      }
+
+      /** Line through each night's value; dashed when `dashed`. */
+      function linePart(frame, run, yAt, value, dashed) {
+        const points = run.map(r => `${frame.xAt(r.night).toFixed(1)},${yAt(value(r)).toFixed(1)}`).join(" ");
+        return `<polyline points="${points}" fill="none" stroke="${SEASON_CHART_COLORS.median}" stroke-width="1.5"${dashed ? ' stroke-dasharray="4 3"' : ""}/>`;
+      }
+
+      /**
+       * Activity chart for one hex: predicted band and median, observed dots, current-night marker.
+       * Y is log10(count + SEASON_CHART_LOG_OFFSET); X spans this hex's nights only.
+       */
+      function seasonChartSvg(rows, currentNight) {
+        const frame = chartFrame(rows);
+        const fmt = (n) => Math.round(n).toLocaleString();
+        const logY = (v) => Math.log10(Math.max(v, 0) + SEASON_CHART_LOG_OFFSET);
+        const maxValue = Math.max(...rows.map(r => Math.max(r.pred_hi, r.observed)));
+        // Top of the axis is at least 10 passes so a near-empty site is not stretched to fill the plot.
+        const yTop = Math.max(logY(maxValue), 1) * 1.05;
+        const yAt = (v) => frame.top + frame.plotH - (logY(v) / yTop) * frame.plotH;
+
+        // Y gridlines at 0 and powers of ten; skip 1 when it would crowd the 0 label.
+        const yTicks = [0];
+        for (let t = maxValue >= 100 ? 10 : 1; logY(t) <= yTop; t *= 10) yTicks.push(t);
+
+        const parts = [...yTickParts(frame, yTicks, yAt, t => t.toLocaleString()), ...xLabelParts(frame, rows)];
+        for (const run of consecutiveRuns(rows)) {
+          parts.push(bandPart(frame, run, yAt, r => r.pred_lo, r => r.pred_hi));
+          if (run.length > 1) parts.push(linePart(frame, run, yAt, r => r.pred_median, true));
+        }
+        parts.push(...currentNightParts(frame, currentNight));
+        for (const r of rows) {
+          const color = insideBand(r) ? SEASON_CHART_COLORS.inside : SEASON_CHART_COLORS.outside;
+          const tip = `${formatDate(r.night)}: observed ${fmt(r.observed)}, predicted ${fmt(r.pred_median)} ` +
+            `(${Math.round(r.pred_interval * 100)}% band ${fmt(r.pred_lo)}-${fmt(r.pred_hi)}), ${r.n_detectors} detector-nights`;
+          parts.push(`<circle cx="${frame.xAt(r.night).toFixed(1)}" cy="${yAt(r.observed).toFixed(1)}" r="${SEASON_CHART_DOT_RADIUS}" fill="${color}"><title>${tip}</title></circle>`);
+        }
+        parts.push(...axisParts(frame, "Bat passes per night"));
+        return chartSvg(parts, "Observed vs predicted bat passes per night");
+      }
+
+      /** A surveyed night's predictive range for its observed rate; the credible band for files written before rate_lo / rate_hi existed. */
+      function rateRange(r) {
+        return r.rate_lo != null ? [r.rate_lo, r.rate_hi] : [r.p_lo, r.p_hi];
+      }
+
+      /** True when a surveyed night's observed rate lies inside its rateRange. */
+      function insideRateRange(r) {
+        const [lo, hi] = rateRange(r);
+        return r.observed_rate >= lo && r.observed_rate <= hi;
+      }
+
+      /**
+       * Detection chart across the whole season: M2 p credible band and median, each surveyed night's
+       * predictive range as a whisker with its observed rate as a dot, the clicked site's survey
+       * window shaded. Y is linear, from a rounded-down floor to 1.
+       */
+      function detectionChartSvg(curve, siteWindow, currentNight) {
+        const frame = chartFrame(curve);
+        const surveyed = curve.filter(r => r.observed_rate != null);
+        const lowest = Math.min(...curve.map(r => r.p_lo), ...surveyed.map(r => Math.min(r.observed_rate, rateRange(r)[0])));
+        const yMin = Math.max(0, Math.floor(lowest / DETECTION_CHART_Y_STEP) * DETECTION_CHART_Y_STEP);
+        const yAt = (v) => frame.top + frame.plotH - ((v - yMin) / (1 - yMin)) * frame.plotH;
+        const yTicks = [];
+        for (let t = yMin; t <= 1 + 1e-9; t += DETECTION_CHART_Y_STEP) yTicks.push(t);
+
+        const parts = [];
+        if (siteWindow) {
+          const xa = frame.xAt(siteWindow.first) - frame.plotW * DAY_MS / (2 * (frame.x1 - frame.x0));
+          const xb = frame.xAt(siteWindow.last) + frame.plotW * DAY_MS / (2 * (frame.x1 - frame.x0));
+          parts.push(`<rect x="${xa.toFixed(1)}" y="${frame.top}" width="${(xb - xa).toFixed(1)}" height="${frame.plotH}" fill="${SEASON_CHART_COLORS.surveyWindow}" opacity="0.6"/>`);
+        }
+        parts.push(...yTickParts(frame, yTicks, yAt, t => t.toFixed(1)), ...xLabelParts(frame, curve));
+        for (const run of consecutiveRuns(curve)) {
+          parts.push(bandPart(frame, run, yAt, r => r.p_lo, r => r.p_hi));
+          if (run.length > 1) parts.push(linePart(frame, run, yAt, r => r.p_median, false));
+        }
+        parts.push(...currentNightParts(frame, currentNight));
+        const pctOf = (v) => (v * 100).toFixed(0);
+        for (const r of surveyed) {
+          const x = frame.xAt(r.night).toFixed(1);
+          const [lo, hi] = rateRange(r);
+          if (r.rate_lo != null) {
+            parts.push(`<line x1="${x}" x2="${x}" y1="${yAt(lo).toFixed(1)}" y2="${yAt(hi).toFixed(1)}" stroke="${SEASON_CHART_COLORS.whisker}" stroke-width="${DETECTION_CHART_WHISKER_PX}"/>`);
+          }
+          const tip = `${formatDate(r.night)}: ${r.n_detected} of ${r.n_surveys} detector-nights recorded a pass ` +
+            `(${pctOf(r.observed_rate)}%); expected ${pctOf(lo)}-${pctOf(hi)}% for ${r.n_surveys} detectors; ` +
+            `model p ${pctOf(r.p_median)}%`;
+          parts.push(`<circle cx="${x}" cy="${yAt(r.observed_rate).toFixed(1)}" r="${SEASON_CHART_DOT_RADIUS - 1}" fill="${insideRateRange(r) ? SEASON_CHART_COLORS.inside : SEASON_CHART_COLORS.outside}"><title>${tip}</title></circle>`);
+        }
+        parts.push(...axisParts(frame, "Detection probability"));
+        return chartSvg(parts, "Detection probability over the season");
+      }
+
+      /** One key entry: a small swatch drawn as inline SVG, then its label. */
+      function seasonKeyItem(swatchSvg, text) {
+        return `<span><svg width="14" height="10" viewBox="0 0 14 10">${swatchSvg}</svg>${text}</span>`;
+      }
+
+      /** Fetches the detection curve once; later calls reuse the result or the in-flight request. */
+      function loadDetectionCurve() {
+        detectionCurveRequest ??= fetch("/api/occupancy/detection_curve")
+          .then(resp => {
+            if (!resp.ok) throw new Error(`detection_curve HTTP ${resp.status}`);
+            return resp.json();
+          })
+          .then(rows => { detectionCurve = rows; })
+          .catch(err => { detectionCurveRequest = null; throw err; });
+        return detectionCurveRequest;
+      }
+
+      /** Redraws the open panel's current tab at the timeline's night; no-op when closed. */
+      function renderSeasonPanel() {
+        if (!seasonPanelSiteCount) return;
+        seasonPanelTabs.forEach(b => b.classList.toggle("active", b.dataset.tab === seasonPanelTab));
+        if (seasonPanelTab === "detection") renderDetectionTab();
+        else renderActivityTab();
+      }
+
+      /** Sets the panel title, subtitle and body HTML. */
+      function setSeasonPanelText(title, subtitle, bodyHtml) {
+        document.getElementById("season-panel-title").textContent = title;
+        document.getElementById("season-panel-subtitle").textContent = subtitle;
+        document.getElementById("season-panel-body").innerHTML = bodyHtml;
+      }
+
+      /** Activity tab: the clicked site's observed vs predicted passes, or a zoom-in hint for several sites. */
+      function renderActivityTab() {
+        if (!seasonPanelHex) {
+          setSeasonPanelText(`${seasonPanelSiteCount} survey sites`, "",
+            '<div class="season-panel-note">Zoom in and click one site to see its season chart.</div>');
+          return;
+        }
+        const rows = hexSeasonRows(seasonPanelHex);
+        if (!rows.length) { closeSeasonPanel(); return; }
+        const c = SEASON_CHART_COLORS;
+        const pct = Math.round(rows[0].pred_interval * 100);
+        const inside = rows.filter(insideBand).length;
+        const key = [
+          seasonKeyItem(`<circle cx="7" cy="5" r="3.5" fill="${c.inside}"/>`, "Observed, inside band"),
+          seasonKeyItem(`<circle cx="7" cy="5" r="3.5" fill="${c.outside}"/>`, "Observed, outside band"),
+          seasonKeyItem(`<rect width="14" height="10" fill="${c.band}"/>`, `${pct}% predicted band`),
+          seasonKeyItem(`<line x1="0" x2="14" y1="5" y2="5" stroke="${c.median}" stroke-width="1.5" stroke-dasharray="4 3"/>`, "Predicted median"),
+          seasonKeyItem(`<line x1="7" x2="7" y1="0" y2="10" stroke="${c.current}" stroke-width="2"/>`, "Timeline night"),
+        ];
+        setSeasonPanelText("Survey site - season",
+          `${formatDateShort(rows[0].night)} - ${formatDate(rows.at(-1).night)}, ${rows.length} nights`, `
+          ${seasonChartSvg(rows, timelineData[currentDateIndex]?.date)}
+          <div class="season-panel-key">${key.join("")}</div>
+          <div class="season-panel-note">
+            <strong>${inside} of ${rows.length}</strong> nights inside the ${pct}% band.
+            Log scale (passes + ${SEASON_CHART_LOG_OFFSET}). Predicted out of sample, by a model fit that never saw this site.
+            Hover a dot for that night's numbers.<br>
+            <strong>H3 cell:</strong> ${seasonPanelHex}
+          </div>
+        `);
+      }
+
+      /** Detection tab: M2 p over the whole season for every site, the clicked site's survey shaded. */
+      function renderDetectionTab() {
+        if (!detectionCurve) {
+          setSeasonPanelText("Detection probability", "", '<div class="season-panel-note">Loading detection curve...</div>');
+          loadDetectionCurve()
+            .then(() => { if (seasonPanelTab === "detection") renderSeasonPanel(); })
+            .catch(err => {
+              console.error("Failed to load detection curve:", err);
+              if (seasonPanelTab === "detection") setSeasonPanelText("Detection probability", "", '<div class="season-panel-note">Failed to load the detection curve.</div>');
+            });
+          return;
+        }
+        if (!detectionCurve.length) {
+          setSeasonPanelText("Detection probability", "",
+            '<div class="season-panel-note">No detection curve yet: run section 18 of occupancy_modeling.ipynb.</div>');
+          return;
+        }
+        const rows = seasonPanelHex ? hexSeasonRows(seasonPanelHex) : [];
+        const siteWindow = rows.length ? { first: rows[0].night, last: rows.at(-1).night } : null;
+        const surveyed = detectionCurve.filter(r => r.observed_rate != null);
+        const inside = surveyed.filter(insideRateRange).length;
+        const hasRange = surveyed.some(r => r.rate_lo != null);
+        const c = SEASON_CHART_COLORS;
+        const pct = Math.round(detectionCurve[0].interval * 100);
+        const key = [
+          seasonKeyItem(`<circle cx="7" cy="5" r="2.5" fill="${c.inside}"/>`, "Observed rate, inside range"),
+          seasonKeyItem(`<circle cx="7" cy="5" r="2.5" fill="${c.outside}"/>`, "outside range"),
+          ...(hasRange ? [seasonKeyItem(`<line x1="7" x2="7" y1="0" y2="10" stroke="${c.whisker}" stroke-width="${DETECTION_CHART_WHISKER_PX}"/>`, `${pct}% range for that night's detectors`)] : []),
+          seasonKeyItem(`<rect width="14" height="10" fill="${c.band}"/>`, `${pct}% credible band of p`),
+          seasonKeyItem(`<line x1="0" x2="14" y1="5" y2="5" stroke="${c.median}" stroke-width="1.5"/>`, "Model p (median)"),
+          ...(siteWindow ? [seasonKeyItem(`<rect width="14" height="10" fill="${c.surveyWindow}" opacity="0.6"/>`, "This site's survey")] : []),
+          seasonKeyItem(`<line x1="7" x2="7" y1="0" y2="10" stroke="${c.current}" stroke-width="2"/>`, "Timeline night"),
+        ];
+        setSeasonPanelText("Detection probability - all sites",
+          `${formatDateShort(detectionCurve[0].night)} - ${formatDate(detectionCurve.at(-1).night)}, M2`, `
+          ${detectionChartSvg(detectionCurve, siteWindow, timelineData[currentDateIndex]?.date)}
+          <div class="season-panel-key">${key.join("")}</div>
+          <div class="season-panel-note">
+            Chance a detector records at least one bat pass in a night, averaged over detectors, for a night of average length.
+            Dots: share of that night's detector-nights, across every site surveyed, that recorded a pass.
+            ${hasRange
+              ? `Grey bars: the range the model expects for that many randomly chosen detectors;
+                 <strong>${inside} of ${surveyed.length}</strong> nights inside it. The blue band is only uncertainty about the curve itself.`
+              : `<strong>${inside} of ${surveyed.length}</strong> inside the credible band (no per-night range in this file - rerun section 18).`}<br>
+            <strong>Caution:</strong> each site was surveyed in its own window, so the seasonal trend is mixed up with differences between sites.
+          </div>
+        `);
+      }
       // ===== EVENT LISTENERS =====
+      document.getElementById("season-panel-close").addEventListener("click", closeSeasonPanel);
+      seasonPanelTabs.forEach(btn => btn.addEventListener("click", () => {
+        seasonPanelTab = btn.dataset.tab;
+        renderSeasonPanel();
+      }));
       viewButtons.forEach(btn => btn.addEventListener("click", () => setViewMode(btn.dataset.mode)));
       modelViewButtons.forEach(btn => btn.addEventListener("click", () => {
         modelView = btn.dataset.modelView;
